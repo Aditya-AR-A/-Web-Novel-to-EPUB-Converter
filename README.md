@@ -66,7 +66,7 @@ Final output: `output/i_can_transform.epub`
 
 ## 📝 Customization
 
-- To change the novel, modify the `url` variable in `main.py` or `scraper.py`:
+- To change the novel, modify the `url` variable in `main.py`:
 
 ```python
 url = "https://freewebnovel.com/novel/i-can-transform-into-any-monster"
