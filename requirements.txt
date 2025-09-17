@@ -3,3 +3,6 @@ beautifulsoup4
 ebooklib
 PyYAML
 PySocks
+fastapi
+uvicorn
+python-multipart
