@@ -4,5 +4,5 @@ ebooklib
 PyYAML
 PySocks
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart

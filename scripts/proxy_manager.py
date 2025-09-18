@@ -6,11 +6,25 @@ import os
 import time
 import requests
 import csv
+import re
+
+# Environment / runtime configuration
+PRIMARY_PROXY = os.getenv("PRIMARY_PROXY")  # e.g. http://user:pass@host:port
+DISABLE_PUBLIC_PROXIES = os.getenv("DISABLE_PUBLIC_PROXIES") == "1"
+SCRAPER_UA = os.getenv("SCRAPER_UA")  # override rotating UA
+MIN_PROXY_HEALTH = int(os.getenv("MIN_PROXY_HEALTH", "-3"))  # when failures score <= value, quarantine
+RETRY_BACKOFF_BASE = float(os.getenv("RETRY_BACKOFF_BASE", "0.6"))
+MAX_BACKOFF = float(os.getenv("MAX_BACKOFF", "4.0"))
+ENABLE_BLOCK_DETECT = os.getenv("ENABLE_BLOCK_DETECT", "1") == "1"
+SHORT_CIRCUIT_ON_FIRST_403 = os.getenv("SHORT_CIRCUIT_ON_FIRST_403", "1") == "1"
 
 _proxies_lock = threading.Lock()
 _proxies: List[str] = []
 _last_load_time: float = 0.0
 _CACHE_TTL = 300  # seconds to reload proxies.yaml
+_proxy_failures: Dict[str, int] = {}
+_quarantined_until: Dict[str, float] = {}
+_QUARANTINE_SECONDS = 600
 
 PROXY_YAML_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'proxies.yaml')
 PROXY_CSV_PATH = os.path.join(os.path.dirname(__file__), 'proxy_list.csv')
@@ -77,12 +91,20 @@ def _load_proxies(force: bool = False) -> None:
                 seen_set.add(p)
                 dedup.append(p)
             random.shuffle(dedup)
-            _proxies = dedup
+            if DISABLE_PUBLIC_PROXIES:
+                _proxies = []
+            else:
+                # Drop any quarantined proxies still within quarantine window
+                now_ts = time.time()
+                filtered = [p for p in dedup if p not in _quarantined_until or _quarantined_until[p] < now_ts]
+                _proxies = filtered
             _last_load_time = now
 
 
 def get_random_proxy_url() -> Optional[str]:
     _load_proxies()
+    if PRIMARY_PROXY:
+        return PRIMARY_PROXY
     if not _proxies:
         return None
     return random.choice(_proxies)
@@ -103,6 +125,9 @@ def sample_proxy_pool(count: int) -> List[Optional[str]]:
     _load_proxies()
     if count <= 0:
         return []
+    if PRIMARY_PROXY:
+        # Always include primary proxy as first slot, rest None (direct) to avoid hammering
+        return [PRIMARY_PROXY] + [None] * (count - 1)
     if not _proxies:
         return [None] * count
     # Prefer SOCKS proxies for better CONNECT support
@@ -122,6 +147,23 @@ def build_requests_proxy(proxy_url: Optional[str]) -> Optional[Dict[str, str]]:
     if not proxy_url:
         return None
     return {"http": proxy_url, "https": proxy_url}
+
+
+class BlockedError(RuntimeError):
+    """Raised when response appears to be from anti-bot / block page."""
+    pass
+
+
+def _looks_blocked(resp: requests.Response) -> bool:
+    if resp.status_code in (401, 403, 429):
+        return True
+    # Simple signature scan
+    txt = resp.text.lower()[:8000]
+    signals = [
+        'captcha', 'access denied', 'forbidden', 'cloudflare', 'ddos protection',
+        'verify you are human', 'just a moment'
+    ]
+    return any(s in txt for s in signals)
 
 
 def fetch_with_proxy_rotation(
@@ -154,10 +196,9 @@ def fetch_with_proxy_rotation(
     for attempt in range(retries):
         if attempt == 0 and preferred_first_proxy is not None:
             proxy_url = preferred_first_proxy
-        elif attempt == 0 and allow_no_proxy:
+        elif attempt == 0 and allow_no_proxy and not PRIMARY_PROXY:
             proxy_url = None
-        elif attempt == 1 and allow_no_proxy:
-            # Always give direct a shot early if allowed
+        elif attempt == 1 and allow_no_proxy and not PRIMARY_PROXY:
             proxy_url = None
         else:
             # Build a candidate set avoiding previously attempted and avoid list
@@ -177,23 +218,45 @@ def fetch_with_proxy_rotation(
         attempted.append(proxy_url)
         proxies = build_requests_proxy(proxy_url)
         headers = {
-            'User-Agent': random.choice(user_agents),
+            'User-Agent': SCRAPER_UA or random.choice(user_agents),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache',
             'Connection': 'keep-alive',
+            'Referer': 'https://freewebnovel.com/'
         }
         try:
             resp = requests.get(url, timeout=timeout, proxies=proxies, headers=headers)
             resp.raise_for_status()
+            if ENABLE_BLOCK_DETECT and _looks_blocked(resp):
+                raise BlockedError(f"Blocked content detected (status={resp.status_code})")
             if attempt > 0:
                 print(f"[proxy_manager] Success after {attempt+1} attempt(s) using proxy={proxy_url}")
+            if proxy_url and proxy_url in _proxy_failures:
+                _proxy_failures[proxy_url] = 0
             return resp
+        except BlockedError as e:
+            last_exc = e
+            print(f"[proxy_manager] Blocked for {url} proxy={proxy_url}: {e}")
+            if proxy_url:
+                _proxy_failures[proxy_url] = _proxy_failures.get(proxy_url, 0) - 1
+            if SHORT_CIRCUIT_ON_FIRST_403:
+                break
         except Exception as e:
             last_exc = e
             print(f"[proxy_manager] Attempt {attempt+1}/{retries} failed for {url} proxy={proxy_url}: {e}")
-            continue
+            if proxy_url:
+                score = _proxy_failures.get(proxy_url, 0) + 1
+                _proxy_failures[proxy_url] = score
+                if score <= MIN_PROXY_HEALTH:
+                    _quarantined_until[proxy_url] = time.time() + _QUARANTINE_SECONDS
+                    print(f"[proxy_manager] Quarantined {proxy_url} fail_score={score}")
+        # Backoff with jitter unless last attempt
+        if attempt < retries - 1:
+            sleep_for = min(MAX_BACKOFF, RETRY_BACKOFF_BASE * (2 ** attempt))
+            sleep_for *= random.uniform(0.75, 1.25)
+            time.sleep(sleep_for)
     # Exhausted
     assert last_exc is not None
     raise last_exc

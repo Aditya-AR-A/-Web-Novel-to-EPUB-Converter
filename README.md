@@ -1,3 +1,15 @@
+---
+title: Web Novel to EPUB Converter
+emoji: 📚
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+short_description: Scrape FreeWebNovel titles and build EPUB volumes via FastAPI.
+---
+
 # 📚 Web Novel to EPUB Converter
 
 This project allows you to **scrape full novels from [FreeWebNovel](https://freewebnovel.com)** and convert them into a clean `.epub` file, including metadata like title, author, cover image, synopsis, and chapter formatting.
@@ -45,7 +57,7 @@ ebooklib
 
 ---
 
-## 🚀 Usage
+## 🚀 Usage (CLI)
 
 ```bash
 python main.py
@@ -93,3 +105,70 @@ Example EPUB created:
 ## 📜 License
 
 MIT License
+
+---
+
+## 🐳 Docker Usage
+
+### Build Locally
+
+```bash
+docker build -t web2epub .
+```
+
+### Run
+
+```bash
+docker run -p 7860:7860 \
+   -e PORT=7860 \
+   -e UVICORN_WORKERS=1 \
+   -v ${PWD}/books:/app/books \
+   -v ${PWD}/media:/app/media \
+   web2epub
+```
+
+Then open: http://localhost:7860/docs
+
+### Environment Variables (Scraping Tuning)
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| PRIMARY_PROXY | Force a single proxy for all requests | http://user:pass@host:port |
+| DISABLE_PUBLIC_PROXIES | Ignore loaded proxy lists | 1 |
+| SCRAPER_UA | Override rotating User-Agent | Mozilla/5.0 ... |
+| MIN_PROXY_HEALTH | Quarantine threshold (<= value) | -3 |
+| RETRY_BACKOFF_BASE | Initial backoff seconds | 0.6 |
+| MAX_BACKOFF | Max backoff cap | 4.0 |
+| ENABLE_BLOCK_DETECT | Enable block page detection | 1 |
+| SHORT_CIRCUIT_ON_FIRST_403 | Stop retry sequence early | 1 |
+
+### Hugging Face Space (Docker)
+
+1. Create a Docker Space.
+2. Add the repository contents (or point to your GitHub fork).
+3. Ensure `Dockerfile` exists at root (provided).
+4. Add environment variables in the Space settings (especially `PRIMARY_PROXY` if needed).
+5. Space automatically builds and exposes at port 7860.
+
+### Health Check
+
+```bash
+curl -s http://localhost:7860/health
+```
+
+### Generate EPUB via API
+
+```bash
+curl -X POST http://localhost:7860/epub/generate \
+   -H "Content-Type: application/json" \
+   -d '{"url":"https://freewebnovel.com/novel/...","chapters_per_book":400,"chapter_workers":0}'
+```
+
+---
+
+## 🛠 Future Enhancements
+
+- Add Gradio UI frontend
+- Persist proxy health across restarts
+- WebSocket progress streaming
+- Chapter fetch caching layer

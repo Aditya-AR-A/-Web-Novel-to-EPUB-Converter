@@ -1,0 +1,20 @@
+# Docker build context pruning
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+media/
+books/
+*.epub
+.cache/
+.mypy_cache/
+.pytest_cache/
+
+# Editors
+.vscode/
+.idea/
+
+# Local artifacts
+*.log
