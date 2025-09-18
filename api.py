@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Body
+from fastapi import FastAPI, UploadFile, File, Form, Body, Request
 from fastapi.responses import FileResponse, JSONResponse
 from typing import Optional, List
 import os
@@ -22,10 +22,37 @@ app = FastAPI(
 # ------------------ MODELS ------------------ #
 class GenerateEpubRequest(BaseModel):
     url: str
-    title: str
-    author: Optional[str] = None
-    genres: Optional[str] = None
-    tags: Optional[str] = None
+    chapters_per_book: int | None = 500
+    chapter_workers: int | None = 0
+    chapter_limit: int | None = 0
+
+    @classmethod
+    def validate_positive(cls, v, field_name):
+        if v is None:
+            return v
+        if not isinstance(v, int):
+            raise ValueError(f"{field_name} must be integer")
+        if v < 0:
+            raise ValueError(f"{field_name} must be >= 0")
+        return v
+
+    def model_post_init(self, __context):  # pydantic v2 style hook; silently coerce invalid to default handled by BaseModel earlier
+        self.chapters_per_book = self.validate_positive(self.chapters_per_book, 'chapters_per_book') or 500
+        self.chapter_workers = self.validate_positive(self.chapter_workers, 'chapter_workers') or 0
+        self.chapter_limit = self.validate_positive(self.chapter_limit, 'chapter_limit') or 0
+
+
+def success(data=None):
+    return {"ok": True, "data": data}
+
+
+def error(message: str, code: str = "error", status: int = 400):
+    return JSONResponse({"ok": False, "error": {"code": code, "message": message}}, status_code=status)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return error(str(exc), code="internal_error", status=500)
 
 class DeleteManyRequest(BaseModel):
     names: List[str]
@@ -40,35 +67,56 @@ def root():
     return {"message": "Web Novel to EPUB Converter API is running."}
 
 
-@app.post("/epub/generate", summary="Generate EPUB from URL")
+@app.post("/epub/generate", summary="Generate EPUB from URL", description="Scrape chapters and build one or more EPUB volumes based on chapters_per_book.")
 def generate_epub(req: GenerateEpubRequest):
-    chapters, metadata = scraper.scrape_novel(req.url, tempfile.gettempdir())
-    epub_filename = f"{req.title}.epub"
-    epub_path = os.path.join(tempfile.gettempdir(), epub_filename)
+    """Mimic the CLI behaviour in main.py for a single URL.
 
-    convert_to_epub.create_epub(
-        chapters=chapters,
-        title=req.title,
-        author=req.author,
-        cover_image=None,
-        genres=req.genres.split(",") if req.genres else [],
-        tags=req.tags.split(",") if req.tags else [],
-        output_path=epub_path,
-        metadata=metadata
-    )
+    Returns list of produced EPUB filenames.
+    """
+    try:
+        metadata = scraper.get_chapter_metadata(req.url)
+    except Exception as e:
+        return error(f"Metadata fetch failed: {e}", code="metadata_fetch_failed", status=502)
+    try:
+        chapters = scraper.get_chapters(
+            req.url if (req.chapter_workers or 0) > 0 else metadata.get("starting_url", req.url),
+            chapter_workers=req.chapter_workers or 0,
+            chapter_limit=(req.chapter_limit if req.chapter_limit and req.chapter_limit > 0 else None)
+        )
+    except Exception as e:
+        return error(f"Chapter fetch failed: {e}", code="chapter_fetch_failed", status=502)
 
-    final_path = os.path.join(BOOKS_DIR, epub_filename)
-    with open(epub_path, "rb") as src, open(final_path, "wb") as dst:
-        dst.write(src.read())
+    titles = chapters.get('title', [])
+    texts = chapters.get('text', [])
+    valid = [1 for t, x in zip(titles, texts) if x and x.strip()]
+    if not valid:
+        return error("No valid chapter content collected.", code="no_chapters", status=422)
+    try:
+        convert_to_epub.to_epub(
+            metadata,
+            chapters,
+            chapters_per_book=req.chapters_per_book or 500
+        )
+    except Exception as e:
+        return error(f"EPUB generation failed: {e}", code="epub_generation_failed", status=500)
 
-    return {"filename": epub_filename, "status": "success"}
+    base = (metadata.get('title', 'untitled').replace(' ', '_').replace(':', '_').lower())
+    produced = []
+    for name in sorted(os.listdir(BOOKS_DIR)):
+        if name.startswith(base + '-') and name.endswith('.epub'):
+            produced.append(name)
+    if not produced:
+        for name in sorted(os.listdir(BOOKS_DIR)):
+            if name.endswith('.epub') and base in name:
+                produced.append(name)
+    return success({"filenames": produced, "count": len(produced)})
 
 
 @app.post("/epub/download", summary="Download single EPUB by filename")
 def download_one_epub(name: str = Body(..., embed=True, description="Name of the EPUB file to download")):
     epub_path = os.path.join(BOOKS_DIR, name)
     if not os.path.exists(epub_path):
-        return JSONResponse({"error": "File not found."}, status_code=404)
+        return error("File not found", code="not_found", status=404)
     return FileResponse(epub_path, filename=name)
 
 
@@ -106,7 +154,7 @@ def delete_all_epubs():
             deleted.append(name)
         except Exception as e:
             errors.append({"name": name, "error": str(e)})
-    return {"deleted": deleted, "errors": errors}
+    return success({"deleted": deleted, "errors": errors})
 
 
 @app.delete("/epubs", summary="Delete multiple EPUBs by filenames")
@@ -122,64 +170,75 @@ def delete_many_epubs(req: DeleteManyRequest):
                 errors.append({"name": name, "error": str(e)})
         else:
             errors.append({"name": name, "error": "File not found."})
-    return {"deleted": deleted, "errors": errors}
+    return success({"deleted": deleted, "errors": errors})
 
 
 @app.delete("/epub/{name}", summary="Delete single EPUB by filename")
 def delete_epub(name: str):
     epub_path = os.path.join(BOOKS_DIR, name)
     if not os.path.exists(epub_path):
-        return JSONResponse({"error": "File not found."}, status_code=404)
+        return error("File not found", code="not_found", status=404)
     try:
         os.remove(epub_path)
-        return {"message": f"Deleted {name}"}
+        return success({"message": f"Deleted {name}"})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return error(str(e), code="delete_failed", status=500)
 
 
 @app.get("/epubs", summary="List all EPUBs")
 def list_epubs():
     files = [f for f in os.listdir(BOOKS_DIR) if f.endswith(".epub")]
-    return {"epubs": files}
+    return success({"epubs": files})
 
 
-@app.post("/convert", summary="Convert novel with optional cover", description="Accepts form-data with URL, title, author, cover, genres, and tags")
+@app.post("/convert", summary="Convert novel with optional cover", description="Accepts form-data with URL and builds EPUB volumes.")
 def convert_novel(
     url: str = Form(..., description="URL of the novel"),
-    title: str = Form(..., description="Title of the EPUB"),
-    author: Optional[str] = Form(None, description="Author name"),
-    cover: Optional[UploadFile] = File(None, description="Cover image file"),
-    genres: Optional[str] = Form(None, description="Comma-separated list of genres"),
-    tags: Optional[str] = Form(None, description="Comma-separated list of tags")
+    chapters_per_book: int = Form(500),
+    chapter_workers: int = Form(0),
+    chapter_limit: int = Form(0),
+    cover: Optional[UploadFile] = File(None, description="Cover image file (optional; overrides downloaded image)"),
 ):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        chapters, metadata = scraper.scrape_novel(url, tmpdir)
+    try:
+        metadata = scraper.get_chapter_metadata(url)
+    except Exception as e:
+        return error(f"Metadata fetch failed: {e}", code="metadata_fetch_failed", status=502)
 
-        cover_path = None
-        if cover:
-            cover_path = os.path.join(tmpdir, cover.filename)
-            with open(cover_path, "wb") as f:
-                f.write(cover.file.read())
-
-        epub_filename = f"{title}.epub"
-        epub_path = os.path.join(tmpdir, epub_filename)
-
-        convert_to_epub.create_epub(
-            chapters=chapters,
-            title=title,
-            author=author,
-            cover_image=cover_path,
-            genres=genres.split(",") if genres else [],
-            tags=tags.split(",") if tags else [],
-            output_path=epub_path,
-            metadata=metadata
+    try:
+        chapters = scraper.get_chapters(
+            url if chapter_workers > 0 else metadata.get("starting_url", url),
+            chapter_workers=chapter_workers,
+            chapter_limit=(chapter_limit if chapter_limit and chapter_limit > 0 else None)
         )
+    except Exception as e:
+        return error(f"Chapter fetch failed: {e}", code="chapter_fetch_failed", status=502)
 
-        final_path = os.path.join(BOOKS_DIR, epub_filename)
-        with open(epub_path, "rb") as src, open(final_path, "wb") as dst:
-            dst.write(src.read())
+    titles = chapters.get('title', [])
+    texts = chapters.get('text', [])
+    if not any(x and x.strip() for x in texts):
+        return error("No valid chapter content collected.", code="no_chapters", status=422)
 
-        return FileResponse(final_path, filename=epub_filename)
+    # Handle cover override
+    if cover:
+        try:
+            os.makedirs('media', exist_ok=True)
+            cover_path = os.path.join('media', f"upload_{cover.filename}")
+            with open(cover_path, 'wb') as f:
+                f.write(cover.file.read())
+            metadata['image_path'] = cover_path
+        except Exception as e:
+            return error(f"Cover save failed: {e}", code="cover_save_failed", status=400)
+
+    try:
+        convert_to_epub.to_epub(metadata, chapters, chapters_per_book=chapters_per_book)
+    except Exception as e:
+        return error(f"EPUB generation failed: {e}", code="epub_generation_failed", status=500)
+
+    base = (metadata.get('title', 'untitled').replace(' ', '_').replace(':', '_').lower())
+    produced = [n for n in sorted(os.listdir(BOOKS_DIR)) if n.startswith(base + '-') and n.endswith('.epub')]
+    if not produced:
+        produced = [n for n in sorted(os.listdir(BOOKS_DIR)) if n.endswith('.epub') and base in n]
+    return success({"filenames": produced, "count": len(produced)})
 
 
 @app.get("/health", summary="Health check")

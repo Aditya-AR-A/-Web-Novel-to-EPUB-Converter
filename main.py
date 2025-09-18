@@ -48,8 +48,11 @@ def read_urls(path: str) -> list[str]:
         return [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
 
 
-def main():
+
+
+def main(url: str | list | None = None):
     parser = argparse.ArgumentParser(description="Web Novel to EPUB Converter")
+    parser.add_argument('-u', '--url', action='append', help='Single URL to process (can be used multiple times)')
     parser.add_argument('-f', '--file', default='urls.txt', help='Path to URLs list file (default: urls.txt)')
     parser.add_argument('-w', '--workers', type=int, default=os.cpu_count() or 2, help='Number of parallel processes')
     parser.add_argument('--limit', type=int, default=0, help='Limit number of URLs to process (0 = all)')
@@ -57,8 +60,12 @@ def main():
     parser.add_argument('--chapter-workers', type=int, default=0, help='Parallel chapter fetchers (0 = sequential via next links)')
     parser.add_argument('--chapter-limit', type=int, default=0, help='Limit number of chapters to fetch (0 = all discovered)')
     args = parser.parse_args()
-
-    urls = read_urls(args.file)
+    
+    if url or args.url:
+        urls = [url] if isinstance(url, str) else list(url)
+    else:
+        urls = read_urls(args.file)
+    
     if args.limit and args.limit > 0:
         urls = urls[:args.limit]
     if not urls:
