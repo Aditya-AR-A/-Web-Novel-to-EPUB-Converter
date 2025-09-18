@@ -1,4 +1,82 @@
+### Project Generated Content ###
 /media
 /books
 *.epub
 *.png
+
+### Python Virtual Environments ###
+.venv/
+venv/
+env/
+ENV/
+__pypackages__/
+
+### Python Caches & Bytecode ###
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*$py.class
+
+### Build / Distribution Artifacts ###
+build/
+dist/
+sdist/
+wheelhouse/
+*.egg-info/
+*.egg
+
+### Test / Coverage ###
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+
+### Tooling / Reports ###
+.benchmarks/
+profile.out
+
+### Logs & Temp ###
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+### Environment / Secrets ###
+.env
+.env.*
+.dotenv
+.python-version
+
+### Editors / IDE ###
+.vscode/
+.idea/
+*.iml
+
+### OS Files ###
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+### Node (if any frontend later) ###
+node_modules/
+
+### Misc ###
+*.bak
+*.orig
+*.rej
+*.patch
+*.tgz
+*.tar.gz
+
+### C Extensions build dir ###
+*.so
