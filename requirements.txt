@@ -6,3 +6,5 @@ PySocks
 fastapi
 uvicorn
 python-multipart
+sqlalchemy
+boto3
