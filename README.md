@@ -1,8 +1,8 @@
 # 📚 Web Novel to EPUB Converter
 
-FastAPI-based web service that scrapes full novels from [FreeWebNovel](https://freewebnovel.com), converts them into polished EPUB files, and persists both metadata and files using **SQLite** (or any SQLAlchemy-compatible database) plus **Amazon S3**.
+FastAPI-based web service that scrapes full novels from [FreeWebNovel](https://freewebnovel.com), converts them into polished EPUB files, and persists both metadata and files using **SQLite / PostgreSQL** and pluggable storage adapters (local disk, Amazon S3, or Google Drive).
 
-The project is designed for stateless deployments such as HuggingFace Spaces. Generated EPUBs survive restarts because they are stored in S3, while metadata is kept in a relational database for quick lookups.
+The project is designed for stateless deployments such as HuggingFace Spaces. Generated EPUBs survive restarts because they are uploaded to durable storage, while metadata is kept in a relational database for quick lookups.
 
 ---
 
@@ -12,7 +12,7 @@ The project is designed for stateless deployments such as HuggingFace Spaces. Ge
 - EPUB generation with clean styling, TOC, intro page, metadata tiles, and embedded cover art.
 - REST API (FastAPI) exposing endpoints to generate, list, download (single/many/all), and delete EPUBs.
 - Persistent metadata via SQLAlchemy ORM models (default SQLite database under `data/epubs.db`).
-- Durable file storage on AWS S3 with presigned download URLs and streaming download endpoints.
+- Durable file storage using pluggable adapters (AWS S3, Google Drive Shared Drive, or local filesystem for development demos).
 - Modular architecture (`app/`) grouping configuration, database, services, routers, schemas, and storage adapters.
 
 ---
@@ -24,7 +24,7 @@ The project is designed for stateless deployments such as HuggingFace Spaces. Ge
 │
 ├── api.py                     # FastAPI application entry point
 ├── app/
-│   ├── config.py              # Environment-driven settings (AWS, DB, etc.)
+│   ├── config.py              # Environment-driven settings (storage, DB, etc.)
 │   ├── db/
 │   │   ├── session.py         # SQLAlchemy engine + session helpers
 │   │   └── models.py          # ORM models (EpubMetadata)
@@ -35,7 +35,9 @@ The project is designed for stateless deployments such as HuggingFace Spaces. Ge
 │   ├── services/
 │   │   └── epub_service.py    # High-level orchestration logic
 │   └── storage/
-│       └── s3.py              # S3 client wrapper with fail-safes
+│       ├── google_drive.py    # Google Drive (Shared Drive / delegated user) adapter
+│       ├── s3.py              # S3 client wrapper with fail-safes
+│       └── local.py           # Local filesystem adapter (HuggingFace demo)
 ├── scripts/                   # Scraping + EPUB conversion helpers (existing logic)
 ├── media/                     # Sample cover assets
 ├── books/                     # Legacy local output (optional)
@@ -58,28 +60,46 @@ pip install -r requirements.txt
 
 ---
 
-## � Configuration
+## ⚙️ Configuration
 
 Environment variables (or `.env`) drive runtime configuration via `app/config.py`.
 
+### Core settings
+
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `AWS_S3_BUCKET` | ✅ | — | Target bucket that stores generated EPUBs. |
-| `AWS_REGION` | ❌ | `us-east-1` | AWS region for the S3 bucket. |
-| `AWS_ACCESS_KEY_ID` | ❌ | — | Access key for S3. Use IAM role/instance profile if omitted. |
-| `AWS_SECRET_ACCESS_KEY` | ❌ | — | Secret key for S3. |
-| `DATABASE_URL` | ❌ | `sqlite:///data/epubs.db` | SQLAlchemy database URL. |
+| `STORAGE_BACKEND` | ❌ | `local` | One of `local`, `s3`, or `google_drive`. |
+| `DATABASE_URL` | ❌ | `sqlite:///data/epubs.db` | SQLAlchemy database URL (Neon/PostgreSQL works great). |
+| `LOCAL_STORAGE_PATH` | ❌ | `books` | Target directory for local storage backend. |
+
+### Amazon S3 backend
+
+| Variable | Required when `STORAGE_BACKEND=s3` | Default | Description |
+| --- | --- | --- | --- |
+| `AWS_S3_BUCKET` | ✅ | — | Bucket that stores generated EPUBs. |
+| `AWS_REGION` | ❌ | `us-east-1` | Region for the bucket. |
+| `AWS_ACCESS_KEY_ID` | ❌ | — | Access key (omit when using IAM role). |
+| `AWS_SECRET_ACCESS_KEY` | ❌ | — | Secret key. |
 | `S3_PRESIGN_EXPIRATION` | ❌ | `3600` | Seconds a presigned URL remains valid. |
 
-Example `.env` for local development:
+### Google Drive backend
+
+| Variable | Required when `STORAGE_BACKEND=google_drive` | Default | Description |
+| --- | --- | --- | --- |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | ✅* | — | Raw JSON for the service account (mutually exclusive with `_FILE`). |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` | ✅* | — | Path to the service account JSON on disk. |
+| `GOOGLE_DRIVE_FOLDER_ID` | ✅† | — | Shared Drive folder ID where EPUBs are uploaded. |
+| `GOOGLE_IMPERSONATED_USER` | ✅† | — | Email to impersonate when using domain-wide delegation. |
+
+`*` Provide either the inline JSON or a file path. `†` You must supply at least one of `GOOGLE_DRIVE_FOLDER_ID` (recommended) or `GOOGLE_IMPERSONATED_USER`. Service accounts have **no personal storage quota**, so the account must either be a member of a Shared Drive (set the folder ID) or delegate to a Workspace user who has storage.
+
+Example `.env` for Google Drive + Neon PostgreSQL:
 
 ```env
-AWS_S3_BUCKET=my-epub-bucket
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=xxxxxxxx
-AWS_SECRET_ACCESS_KEY=yyyyyyyy
-DATABASE_URL=sqlite:///data/epubs.db
-S3_PRESIGN_EXPIRATION=3600
+STORAGE_BACKEND=google_drive
+GOOGLE_SERVICE_ACCOUNT_FILE=/app/credentials/service-account.json
+GOOGLE_DRIVE_FOLDER_ID=1AbCdEfGhIjKlMnOpQr
+DATABASE_URL=postgresql+psycopg://user:pass@db.neon.tech/dbname
 ```
 
 For HuggingFace Spaces, store secrets using the built-in **Repository Secrets** UI so they remain encrypted.
@@ -100,7 +120,7 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 On startup the app:
 
 - Creates database tables (`EpubMetadata`).
-- Verifies S3 configuration by generating a short-lived presigned URL.
+- Validates the configured storage backend (S3 presign, Google Drive health check, etc.).
 
 ---
 
@@ -108,7 +128,7 @@ On startup the app:
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `POST` | `/epubs/generate` | Scrape a novel, build an EPUB, upload to S3, and return metadata. |
+| `POST` | `/epubs/generate` | Scrape a novel, build an EPUB, upload to the configured storage backend, and return metadata. |
 | `GET` | `/epubs/` | List stored EPUB metadata records. |
 | `GET` | `/epubs/{ebook_id}` | Retrieve metadata for a single EPUB by ID. |
 | `DELETE` | `/epubs/{ebook_id}` | Delete EPUB metadata and the S3 object. |
@@ -116,14 +136,17 @@ On startup the app:
 | `POST` | `/epubs/download/many` | Stream multiple EPUBs zipped together. |
 | `POST` | `/epubs/download/all` | Stream every stored EPUB in one ZIP. |
 
-Responses include the S3 key and a presigned download URL so clients can fetch files directly without proxying through the API if preferred.
+Responses include the storage key and (when supported) a presigned download URL so clients can fetch files directly without proxying through the API if preferred.
 
 ---
 
 ## 🗃️ Storage Strategy
 
-- **Database (SQLite by default):** Stores metadata such as title, author, original source URL, S3 key, presigned URL, file size, status, and error messages.
-- **S3:** Stores the binary EPUB files using keys like `epubs/<slug>-<unique-id>.epub`. All download endpoints stream from S3 or return presigned URLs. The app never relies on ephemeral local filesystem beyond temporary generation directories.
+- **Database (SQLite by default):** Stores metadata such as title, author, original source URL, storage key/URL, file size, status, and error messages.
+- **Storage backend:**
+	- _Local_ — drops EPUBs into `LOCAL_STORAGE_PATH` (great for quick tests / Spaces demos).
+	- _S3_ — stores EPUBs under keys like `epubs/<slug>-<unique-id>.epub`; download endpoints stream from S3 or return presigned URLs.
+	- _Google Drive_ — uploads EPUBs into a Shared Drive folder (or via delegated user) and exposes a shareable download link.
 
 To switch databases (e.g., PostgreSQL, MySQL), update `DATABASE_URL`. SQLAlchemy handles the rest.
 

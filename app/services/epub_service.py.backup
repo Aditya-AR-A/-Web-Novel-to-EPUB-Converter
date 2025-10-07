@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app.db.models import EpubMetadata
 from app.db.session import get_session
-from app.storage import get_storage
+from app.storage import get_s3_storage
 from scripts import convert_to_epub, scraper
 
 
@@ -24,7 +24,7 @@ def _slugify(value: str) -> str:
 
 class EpubService:
     def __init__(self) -> None:
-        self.storage = get_storage()
+        self.storage = get_s3_storage()
 
     def create_epub(
         self,
@@ -39,15 +39,15 @@ class EpubService:
         slug = _slugify(title)
         unique_suffix = uuid.uuid4().hex[:8]
         epub_filename = f"{slug}-{unique_suffix}.epub"
-        storage_key = f"epubs/{epub_filename}"
+        s3_key = f"epubs/{epub_filename}"
 
         with get_session() as session:
             record = EpubMetadata(
                 title=title,
                 author=author,
                 source_url=url,
-                storage_key=storage_key,
-                storage_url="",
+                s3_key=s3_key,
+                s3_url="",
                 file_size=0,
                 status="processing",
             )
@@ -56,7 +56,7 @@ class EpubService:
             session.refresh(record)
 
         try:
-            storage_key_result, storage_url, file_size = self._generate_and_upload(
+            s3_url, file_size = self._generate_and_upload(
                 url=url,
                 title=title,
                 author=author,
@@ -64,7 +64,7 @@ class EpubService:
                 tags=tags or [],
                 cover=cover,
                 epub_filename=epub_filename,
-                storage_key=storage_key,
+                s3_key=s3_key,
             )
         except Exception as exc:
             with get_session() as session:
@@ -78,9 +78,8 @@ class EpubService:
             db_record = session.get(EpubMetadata, record.id)
             if not db_record:
                 raise RuntimeError("Failed to load metadata after generation.")
-            db_record.storage_key = storage_key_result
             db_record.status = "ready"
-            db_record.storage_url = storage_url
+            db_record.s3_url = s3_url
             db_record.file_size = file_size
             db_record.error_message = None
             session.flush()
@@ -101,7 +100,7 @@ class EpubService:
             record = session.get(EpubMetadata, ebook_id)
             if not record:
                 return False
-            self.storage.delete_object(record.storage_key)
+            self.storage.delete_object(record.s3_key)
             session.delete(record)
             return True
 
@@ -109,17 +108,17 @@ class EpubService:
         if not keys:
             return []
         with get_session() as session:
-            result = session.execute(select(EpubMetadata).where(EpubMetadata.storage_key.in_(keys)))
+            result = session.execute(select(EpubMetadata).where(EpubMetadata.s3_key.in_(keys)))
             return list(result.scalars().all())
 
     def get_all(self) -> List[EpubMetadata]:
         return self.list_epubs()
 
-    def download_buffer(self, storage_key: str):
-        return self.storage.download_object(storage_key)
+    def download_buffer(self, s3_key: str):
+        return self.storage.download_object(s3_key)
 
-    def generate_presigned_url(self, storage_key: str) -> str:
-        return self.storage.generate_presigned_url(storage_key)
+    def generate_presigned_url(self, s3_key: str) -> str:
+        return self.storage.generate_presigned_url(s3_key)
 
     def _generate_and_upload(
         self,
@@ -131,8 +130,8 @@ class EpubService:
         tags: List[str],
         cover: Optional[UploadFile],
         epub_filename: str,
-        storage_key: str,
-    ) -> tuple[str, str, int]:
+        s3_key: str,
+    ) -> tuple[str, int]:
         from tempfile import TemporaryDirectory
 
         with TemporaryDirectory() as tmpdir:
@@ -159,13 +158,5 @@ class EpubService:
                 metadata=metadata,
             )
             file_size = os.path.getsize(epub_path)
-            upload_result = self.storage.upload_file(epub_path, storage_key)
-
-            if hasattr(upload_result, "download_url") and hasattr(upload_result, "file_id"):
-                final_storage_key = upload_result.file_id
-                storage_url = upload_result.download_url
-            else:
-                final_storage_key = storage_key
-                storage_url = upload_result
-
-            return final_storage_key, storage_url, file_size
+            s3_url = self.storage.upload_file(epub_path, s3_key)
+            return s3_url, file_size

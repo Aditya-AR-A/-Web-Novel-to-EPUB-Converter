@@ -1,22 +1,30 @@
 from bs4 import BeautifulSoup
 import os
-import sys
-import requests
-from scripts.proxy_manager import fetch_with_proxy_rotation, sample_proxy_pool
-
-from scripts.convert_to_epub import to_epub
-from scripts.get_text_from_html import get_chapter_data
-from urllib.parse import urljoin
 import re
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple, Dict
+from urllib.parse import urljoin
+
+from scripts.proxy_manager import fetch_with_proxy_rotation, sample_proxy_pool
+from scripts.get_text_from_html import get_chapter_data
+
+# Import cancellation support (gracefully handle if not available)
+try:
+    from scripts.cancellation import raise_if_cancelled, raise_if_stopped, is_stopped
+except ImportError:
+    def raise_if_cancelled():
+        pass
+    def raise_if_stopped():
+        pass
+    def is_stopped():
+        return False
 
 
 # send the link to first page
 
 origin_url = "https://freewebnovel.com"
 
-from bs4 import BeautifulSoup
 
 def get_chapter_metadata(url):
 
@@ -178,18 +186,28 @@ def list_chapter_urls_from_index(index_url: str) -> List[Tuple[int, str]]:
     return out
 
 
-def get_chapters_concurrent_from_index(index_url: str, *, max_workers: int = 5, limit: int | None = None) -> Dict[str, List[str]]:
+def get_chapters_concurrent_from_index(
+    index_url: str,
+    *,
+    max_workers: int = 5,
+    limit: int | None = None,
+    start: int = 1,
+) -> Dict[str, List[str]]:
     """Fetch chapters concurrently using chapter links parsed from the index page.
 
     - Assign a sticky proxy per worker stream to reduce blocks and session churn.
     - Retry per request with rotation.
     - Preserve output order by chapter index.
     """
+    raise_if_cancelled()
     indexed = list_chapter_urls_from_index(index_url)
+    start = max(1, start)
+    if start > 1:
+        indexed = [pair for pair in indexed if pair[0] >= start]
     if not indexed:
         print("⚠️ No chapter links found on index; falling back to sequential next-links crawl.")
         # Fallback: Follow next links starting from chapter-1 URL
-        return get_chapters_sequential(index_url)
+        return get_chapters_sequential(index_url, start_at=start, limit=limit)
     if limit and limit > 0:
         indexed = indexed[:limit]
 
@@ -201,6 +219,7 @@ def get_chapters_concurrent_from_index(index_url: str, *, max_workers: int = 5, 
     failed_stack: List[Tuple[int, str]] = []
 
     def worker(idx_url_pair: Tuple[int, str], stream_id: int, proxy_override=None):
+        raise_if_cancelled()
         idx, url = idx_url_pair
         preferred = proxy_override if proxy_override else (proxy_pool[stream_id % len(proxy_pool)] if proxy_pool else None)
         avoid = [p for j, p in enumerate(proxy_pool) if j != (stream_id % len(proxy_pool))]
@@ -214,6 +233,9 @@ def get_chapters_concurrent_from_index(index_url: str, *, max_workers: int = 5, 
             future_map[future] = pair
         # Track which chapters failed
         for fut in as_completed(future_map):
+            raise_if_cancelled()
+            if is_stopped():
+                break
             try:
                 ch_idx, ch_title, ch_text = fut.result()
             except Exception as e:
@@ -268,19 +290,30 @@ def get_chapters_concurrent_from_index(index_url: str, *, max_workers: int = 5, 
     # Build ordered lists; if everything failed (no results), fallback sequentially
     if not results:
         print("⚠️ All concurrent chapter fetches failed; falling back to sequential crawl.")
-        return get_chapters_sequential(index_url)
+        return get_chapters_sequential(index_url, start_at=start, limit=limit)
     ordered_indices = sorted(results.keys())
     titles = [results[i][0] for i in ordered_indices]
     texts = [results[i][1] for i in ordered_indices]
     return {"title": titles, "text": texts}
 
 
-def get_chapters_sequential(read_first_url: str) -> Dict[str, List[str]]:
+def get_chapters_sequential(
+    read_first_url: str,
+    *,
+    start_at: int = 1,
+    limit: int | None = None,
+) -> Dict[str, List[str]]:
     chapter_title_list: List[str] = []
     chapter_text_list: List[str] = []
     next_url: str | None = read_first_url
     empty_streak = 0
+    collected = 0
+    start_at = max(1, start_at)
+    valid_seen = 0
     while next_url:
+        raise_if_cancelled()
+        if is_stopped():
+            break
         current_url = next_url
         next_url_short, chapter_title, chapter_data = get_chapter_data(current_url)
         if not chapter_data or not chapter_data.strip():
@@ -291,21 +324,88 @@ def get_chapters_sequential(read_first_url: str) -> Dict[str, List[str]]:
                 break
         else:
             empty_streak = 0
-            chapter_title_list.append(chapter_title or f"Chapter {len(chapter_title_list)+1}")
+            valid_seen += 1
+            if valid_seen < start_at:
+                next_url = urljoin(origin_url, next_url_short) if next_url_short else None
+                continue
+            chapter_title_list.append(chapter_title or f"Chapter {valid_seen}")
             chapter_text_list.append(chapter_data)
+            collected += 1
+            if limit and limit > 0 and collected >= limit:
+                break
         next_url = urljoin(origin_url, next_url_short) if next_url_short else None
     return {"title": chapter_title_list, "text": chapter_text_list}
 
 
-def get_chapters(read_first_url_or_index: str, *, chapter_workers: int = 0, chapter_limit: int | None = None):
+def get_chapters(
+    read_first_url_or_index: str,
+    *,
+    chapter_workers: int = 0,
+    chapter_limit: int | None = None,
+    start_chapter: int = 1,
+):
     """Top-level chapter fetcher.
 
     If chapter_workers > 0, treat the given URL as the novel index page and fetch
     chapter links concurrently; otherwise, follow next links sequentially from the
     provided chapter-1 URL.
     """
+    limit = chapter_limit if chapter_limit and chapter_limit > 0 else None
+    start = max(1, start_chapter or 1)
     if chapter_workers and chapter_workers > 0:
-        return get_chapters_concurrent_from_index(read_first_url_or_index, max_workers=chapter_workers, limit=chapter_limit)
-    return get_chapters_sequential(read_first_url_or_index)
+        return get_chapters_concurrent_from_index(
+            read_first_url_or_index,
+            max_workers=chapter_workers,
+            limit=limit,
+            start=start,
+        )
+    return get_chapters_sequential(
+        read_first_url_or_index,
+        start_at=start,
+        limit=limit,
+    )
 
     
+
+def scrape_novel(
+    url: str,
+    tmpdir: str,
+    *,
+    chapter_workers: int | None = None,
+    chapter_limit: int | None = None,
+    start_chapter: int = 1,
+):
+    """Fetch novel metadata and chapters, mirroring the legacy API surface.
+
+    The return signature matches the deprecated ``scraper.scrape_novel`` helper
+    that the service layer still depends on. The cover image is copied into the
+    provided temporary directory to ensure downstream EPUB builders can access
+    it even if the original path is in a shared media folder.
+    """
+
+    metadata = get_chapter_metadata(url)
+
+    workers = chapter_workers or 0
+    entrypoint = metadata.get("starting_url") or url
+    chapter_source = url if workers > 0 else entrypoint
+
+    chapters = get_chapters(
+        chapter_source,
+        chapter_workers=workers,
+        chapter_limit=chapter_limit,
+        start_chapter=start_chapter,
+    )
+
+    image_path = metadata.get("image_path")
+    if image_path and os.path.exists(image_path):
+        try:
+            copied_path = os.path.join(tmpdir, os.path.basename(image_path))
+            shutil.copy(image_path, copied_path)
+            metadata["image_path"] = copied_path
+        except Exception:
+            # If the copy fails the original path is still a valid fallback.
+            pass
+
+    return chapters, metadata
+
+

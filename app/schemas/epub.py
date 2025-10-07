@@ -11,15 +11,15 @@ class EpubCreateResponse(BaseModel):
     title: str
     author: Optional[str]
     source_url: AnyUrl
-    s3_key: str
-    s3_url: AnyUrl
+    storage_key: str
+    storage_url: AnyUrl
     file_size: int
     status: str
+    error_message: Optional[str]
     created_at: dt.datetime
     updated_at: dt.datetime
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 
 class EpubListResponse(BaseModel):
