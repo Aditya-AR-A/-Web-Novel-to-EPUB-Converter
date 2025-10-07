@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang='en'>
+
+<head>
+    <meta charset='UTF-8' />
+    <title>Web Novel → EPUB</title>
+    <meta name='viewport' content='width=device-width,initial-scale=1' />
+    <link rel="icon" href="/static/logo.png" type="image/png" />
+    <style>
+        :root {
+            color-scheme: dark light;
+            --bg: #0d1117;
+            --bg-alt: #161b22;
+            --bg-accent: #1e2530;
+            --panel: #1b222c;
+            --panel-alt: #243041;
+            --border: #2d3745;
+            --text: #e6edf3;
+            --text-dim: #8b97a5;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+            --header-g1: #111a25;
+            --header-g2: #16202c;
+            --header-g3: #1d2835;
+            --resizer-bg: #ffffff10;
+            --resizer-hover-bg: #ffffff18;
+            --input-bg: #0f141a;
+            --input-border: #2b3644;
+            --input-bg-focus: #101923;
+            --secondary-border: #2d3a48;
+            --secondary-hover-bg: #263242;
+            --secondary-hover-border: #3a4b5e;
+            --row-hover-bg: #1f2935;
+            --badge-bg: #4338ca;
+            --spinner-border: #ffffff40;
+            --spinner-top: #fff;
+            --log-bg: #0a0f14;
+            --log-inset1: #1f2933;
+            --log-inset2: #0d141b;
+            --page-bg: radial-gradient(circle at 25% 15%, #19202b 0%, #0d1117 55%) fixed;
+            --radius: 14px;
+            --radius-sm: 8px;
+            --shadow-sm: 0 2px 4px -1px #0007, 0 1px 2px -1px #0009;
+            --shadow: 0 6px 18px -8px #000a, 0 3px 8px -3px #0008;
+            --focus: 0 0 0 2px #0d1117, 0 0 0 4px var(--accent);
+            --sidebar-width: 380px;
+            --header-height: 86px; /* will be updated dynamically via JS */
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        }
+
+        :root.light {
+            --bg: #f5f7fa;
+            --bg-alt: #ffffff;
+            --bg-accent: #e8eef5;
+            --panel: #ffffff;
+            --panel-alt: #f4f7fb;
+            --border: #d9e1ea;
+            --text: #1e2933;
+            --text-dim: #526170;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+            --header-g1: #f6f9fc;
+            --header-g2: #eef3f9;
+            --header-g3: #e9eff7;
+            --resizer-bg: #00000010;
+            --resizer-hover-bg: #0000001f;
+            --input-bg: #ffffff;
+            --input-border: #d9e1ea;
+            --input-bg-focus: #f4f7fb;
+            --secondary-border: #cbd5e1;
+            --secondary-hover-bg: #e2e9f2;
+            --secondary-hover-border: #c0cbd9;
+            --row-hover-bg: #eef3f9;
+            --badge-bg: #4338ca;
+            --spinner-border: #00000020;
+            --spinner-top: #000;
+            --log-bg: #f6f9fc;
+            --log-inset1: #e3eaf2;
+            --log-inset2: #eaeff6;
+            --page-bg: radial-gradient(circle at 25% 15%, #eef3f9 0%, #ffffff 55%) fixed;
+            color-scheme: light;
+        }
+
+        /* Logo styling */
+        .logo {
+            height: 28px;
+            width: auto;
+            display: block;
+            border-radius: 6px;
+            box-shadow: 0 2px 6px #0006;
+        }
+
+        body {
+            margin: 0;
+            background: var(--page-bg);
+            color: var(--text);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            backdrop-filter: blur(10px);
+            background: linear-gradient(90deg, var(--header-g1), var(--header-g2) 55%, var(--header-g3));
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 1.5rem 1.1rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.15rem;
+            letter-spacing: .5px;
+            font-weight: 600;
+        }
+
+        main {
+            max-width: 1400px;
+            margin: 1.7rem auto 4rem;
+            padding: 0 0 0 1.25rem;
+        }
+
+        /* Two-column layout with collapsible and resizable sidebar */
+        .layout {
+            display: grid;
+            grid-template-columns: 1fr 10px var(--sidebar-width);
+            gap: 1.1rem;
+            align-items: start;
+        }
+
+        .resizer {
+            width: 10px;
+            cursor: col-resize;
+            position: relative;
+            border-radius: 8px;
+        }
+
+        .resizer:before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 8px;
+            background: var(--resizer-bg);
+            border: 1px dashed var(--border);
+        }
+
+        .resizer:hover:before {
+            background: var(--resizer-hover-bg);
+        }
+
+        .resizing .resizer:before {
+            background: #3b82f640;
+            border-color: #3b82f6;
+        }
+
+        .sidebar {
+            position: sticky;
+            top: var(--header-height, 86px);
+            height: calc(90vh - var(--header-height, 86px));
+            display: flex;
+            flex-direction: column;
+            gap: .8rem;
+        }
+
+        /* Allow the logs section to grow and its inner content to scroll */
+        .sidebar .status-wrap {
+            flex: 1 1 auto;
+            min-height: 0; /* critical for scrollable children in flex containers */
+        }
+
+        .sidebar .card {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0; /* allow inner .status-bar to establish its own scrolling */
+        }
+
+        .sidebar .status-wrap {
+            margin: 0;
+        }
+
+        .sidebar .status-bar {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto; /* ensure scrolling is enabled */
+            overscroll-behavior: contain; /* keep scroll gestures contained */
+        }
+
+        .logs-collapsed .sidebar {
+            display: none;
+        }
+
+        .logs-collapsed .resizer {
+            display: none;
+        }
+
+        .logs-collapsed .layout {
+            grid-template-columns: 1fr;
+        }
+
+        @media (max-width: 980px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                position: static;
+                height: auto;
+            }
+
+            .resizer {
+                display: none;
+            }
+        }
+
+        .card {
+            background: linear-gradient(145deg, var(--panel), var(--panel-alt));
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.05rem 1.15rem 1.25rem;
+            box-shadow: var(--shadow);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card:before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(120deg, #ffffff09, #ffffff00 40%);
+            mix-blend-mode: overlay;
+        }
+
+        form#genForm {
+            display: flex;
+            flex-direction: column;
+            gap: .9rem;
+            align-items: flex-start;
+        }
+
+        form label {
+            font-size: .68rem;
+            text-transform: uppercase;
+            letter-spacing: .9px;
+            opacity: .75;
+            display: block;
+            margin: 0 0 .4rem;
+            font-weight: 600;
+        }
+
+        form input[type=text],
+        form input[type=number] {
+            width: 100%;
+            padding: .62rem .75rem;
+            border: 1px solid #2b3644;
+            background: #0f141a;
+            color: var(--text);
+            border-radius: var(--radius-sm);
+            font-size: .95rem;
+            line-height: 1.2;
+            transition: .18s border, .18s background, .18s box-shadow;
+        }
+
+        form input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: var(--focus);
+            background: #101923;
+        }
+
+        form .field {
+            min-width: 0;
+        }
+
+        .field.url {
+            width: 100%;
+        }
+
+        .field.narrow {
+            width: 240px;
+            max-width: 100%;
+        }
+
+        .field.buttons {
+            display: flex;
+            gap: .6rem;
+            align-items: center;
+        }
+
+        @media (max-width:620px) {
+            .field.narrow {
+                width: 100%;
+            }
+        }
+
+        button {
+            font-family: inherit;
+        }
+
+        button.primary {
+            background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+            color: #fff;
+            border: none;
+            padding: .78rem 1.25rem;
+            font-weight: 600;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: .55rem;
+            font-size: .9rem;
+            letter-spacing: .3px;
+            box-shadow: 0 4px 14px -6px #000c, 0 2px 4px -2px #000a;
+            position: relative;
+            overflow: hidden;
+            transition: .2s transform, .25s box-shadow;
+        }
+
+        button.primary:before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(120deg, #ffffff33 10%, transparent 60%);
+            opacity: 0;
+            transition: .4s;
+        }
+
+        button.primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -10px #000c, 0 3px 9px -3px #000a;
+        }
+
+        button.primary:hover:before {
+            opacity: 1;
+        }
+
+        button.primary:active {
+            transform: translateY(0);
+        }
+
+        button.primary:disabled {
+            opacity: .5;
+            cursor: progress;
+        }
+
+        button.secondary {
+            background: var(--bg-accent);
+            color: var(--text);
+            border: 1px solid #2d3a48;
+            padding: .55rem .95rem;
+            font-size: .78rem;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            display: inline-flex;
+            gap: .45rem;
+            align-items: center;
+            font-weight: 500;
+            letter-spacing: .3px;
+            transition: .18s background, .18s border, .18s color;
+        }
+
+        button.secondary:hover {
+            background: #263242;
+            border-color: #3a4b5e;
+        }
+
+        button.secondary.danger,
+        .danger {
+            background: linear-gradient(120deg, var(--danger), var(--danger-hover));
+            border: 1px solid #631616;
+            color: #fff;
+        }
+
+        button.secondary.danger:hover,
+        .danger:hover {
+            filter: brightness(1.05);
+        }
+
+        section {
+            margin-top: 2.25rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 3px;
+            font-size: .83rem;
+        }
+
+        thead th {
+            font-size: .6rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+            color: var(--text-dim);
+            padding: .35rem .55rem .55rem;
+        }
+
+        tbody td {
+            background: var(--bg-alt);
+            border-top: 1px solid #263240;
+            border-bottom: 1px solid #1a222c;
+            padding: .55rem .65rem;
+        }
+
+        tbody tr td:first-child {
+            border-left: 1px solid #263240;
+            border-top-left-radius: 10px;
+            border-bottom-left-radius: 10px;
+        }
+
+        tbody tr td:last-child {
+            border-right: 1px solid #263240;
+            border-top-right-radius: 10px;
+            border-bottom-right-radius: 10px;
+        }
+
+        tbody tr {
+            transition: .18s background, .18s transform;
+        }
+
+        tbody tr:hover td {
+            background: #1f2935;
+        }
+
+        tbody tr:active td {
+            transform: scale(.995);
+        }
+
+        .actions {
+            display: flex;
+            gap: .55rem;
+            flex-wrap: wrap;
+            margin-top: .75rem;
+        }
+
+        .status-wrap {
+            margin-top: 1.35rem;
+        }
+
+        .status-bar {
+            margin-top: .65rem;
+            font-family: ui-monospace, monospace;
+            white-space: pre-line;
+            background: var(--log-bg);
+            padding: .8rem .9rem 1rem;
+            border-radius: 12px;
+            overflow: auto;
+            font-size: .68rem;
+            line-height: 1.32;
+            box-shadow: inset 0 0 0 1px var(--log-inset1), 0 0 0 1px var(--log-inset2);
+            position: relative;
+        }
+
+        .log-info {
+            color: var(--text-dim);
+        }
+
+        .log-err {
+            color: #f87171;
+        }
+
+        .log-warn {
+            color: #facc15;
+        }
+
+        .spinner {
+            width: 14px;
+            height: 14px;
+            border: 3px solid var(--spinner-border);
+            border-top-color: var(--spinner-top);
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .status-bar:before {
+            content: "Logs";
+            position: absolute;
+            top: 4px;
+            right: 10px;
+            font-size: .55rem;
+            opacity: .4;
+            letter-spacing: 1px;
+        }
+
+        .flex {
+            display: flex;
+            gap: .75rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .grow {
+            flex: 1 1 auto;
+        }
+
+        a.dl {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        a.dl:hover {
+            text-decoration: underline;
+        }
+
+        footer {
+            margin: 3.5rem 0 2.4rem;
+            text-align: center;
+            font-size: .6rem;
+            opacity: .45;
+            letter-spacing: .8px;
+        }
+
+        .inline-badge {
+            background: #4338ca;
+            color: #fff;
+            font-size: .55rem;
+            padding: .18rem .5rem .2rem;
+            border-radius: 6px;
+            vertical-align: middle;
+            margin-left: .45rem;
+            letter-spacing: .6px;
+            font-weight: 600;
+            box-shadow: 0 2px 6px -3px #0009;
+        }
+
+        .helper-text {
+            font-size: .6rem;
+            opacity: .6;
+            max-width: 260px;
+            line-height: 1.3;
+        }
+
+        .fade-in {
+            animation: fade .4s ease;
+        }
+
+        @keyframes fade {
+            from {
+                opacity: 0;
+                transform: translateY(4px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        ::selection {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        input[type=checkbox] {
+            cursor: pointer;
+        }
+
+        @media (max-width:880px) {
+            .actions {
+                width: 100%;
+            }
+
+            header {
+                position: static;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <div style='display:flex;align-items:center;gap:.85rem;'>
+            <img src="/static/logo.png" alt="Logo" class="logo" />
+            <h1 style='flex:1 1 auto;'>Web Novel → EPUB </h1>
+            <button id='logsToggle' class='secondary' style='font-size:.65rem;padding:.5rem .7rem;'
+                title='Toggle logs sidebar'>🪵 Logs</button>
+            <button id='themeToggle' class='secondary' style='font-size:.65rem;padding:.5rem .7rem;'
+                title='Toggle light/dark theme'>🌗 Theme</button>
+        </div>
+    </header>
+    <main>
+        <div class='layout'>
+            <div class='content'>
+                <div class='card fade-in'>
+                    <form id='genForm'>
+                        <div class='field url' style='min-width:260px;'>
+                            <label>Novel URL</label>
+                            <input type='text' id='url' placeholder='https://freewebnovel.com/novel/...'>
+                        </div>
+                        <div class='field narrow'>
+                            <label>Chapters / Book</label>
+                            <input type='number' id='chapters_per_book' placeholder='500 (default)' min='10' step='10'>
+                        </div>
+                        <div class='field narrow'>
+                            <label>Chapter Workers</label>
+                            <input type='number' id='chapter_workers' placeholder='1 (default)' min='1' max='16'>
+                        </div>
+                        <div class='field narrow'>
+                            <label>Limit Chapters</label>
+                            <input type='number' id='chapter_limit' placeholder='0 = all (default)' min='0'>
+                        </div>
+                        <div class='field narrow'>
+                            <label>Start Chapter</label>
+                            <input type='number' id='start_chapter' placeholder='1 (default)' min='1'>
+                        </div>
+                        <div class='field buttons'>
+                            <button type='submit' class='primary' id='genBtn'>Generate EPUB</button>
+                            <button type='button' class='secondary danger' id='cancelBtn' disabled>Cancel</button>
+                            <button type='button' class='secondary' id='stopBtn' disabled>Stop (save partial)</button>
+                        </div>
+                        <div class='grow'></div>
+                        <div class='helper-text'>Uses server API; this UI is optional. For programmatic use see
+                            <code>/docs</code>.
+                        </div>
+                    </form>
+                </div>
+
+                <section class='fade-in' style='animation-delay:.05s;'>
+                    <div class='flex'>
+                        <h2 style='font-size:.95rem; margin:.15rem 0 .4rem; font-weight:600; letter-spacing:.5px;'>
+                            Available EPUBs</h2>
+                        <div class='grow'></div>
+                        <div class='actions'>
+                            <button class='secondary' id='refreshBtn' title='Refresh list'>Refresh</button>
+                            <select id='pageSize' class='secondary' style='min-width:90px;'>
+                                <option value='10'>10</option>
+                                <option value='20' selected>20</option>
+                                <option value='50'>50</option>
+                                <option value='100'>100</option>
+                            </select>
+                            <div id='pager' style='display:flex;align-items:center;gap:.4rem;'></div>
+                            <button class='secondary' id='downloadSelBtn' disabled>Download Selected</button>
+                            <button class='secondary' id='downloadAllBtn'>Download All</button>
+                            <button class='secondary danger' id='deleteSelBtn' disabled>Delete Selected</button>
+                            <button class='secondary danger' id='deleteAllBtn'>Delete All</button>
+                        </div>
+                    </div>
+                    <div class='card' style='padding:0.4rem .6rem .9rem;'>
+                        <table id='epubTable'>
+                            <thead>
+                                <tr>
+                                    <th style='width:32px;'><input type='checkbox' id='selectAll'></th>
+                                    <th>Filename</th>
+                                    <th style='width:120px;'>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id='epubBody'>
+                                <tr>
+                                    <td colspan='3' style='padding:1rem; opacity:.6; background:transparent;'>Loading…
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                <footer class='fade-in' style='animation-delay:.15s;'>Generated UI • API spec at <a class='dl'
+                        href='/docs'>/docs</a></footer>
+            </div>
+            <div class='resizer' id='sidebarResizer' title='Drag to resize logs panel'></div>
+            <aside class='sidebar'>
+                <section class='status-wrap fade-in' style='animation-delay:.1s;'>
+                    <div class='card' style='padding:.85rem .9rem 1rem;'>
+                        <div style='display:flex;gap:1rem;flex-wrap:wrap;font-size:.6rem;opacity:.8;margin:0 0 .35rem;'>
+                            <h2 style='font-size:.95rem; font-weight:600; letter-spacing:.5px; margin:0 0 .6rem;'>Status
+                                / Logs
+                            </h2>
+                            <label style='display:flex;align-items:center;gap:.25rem;'><input type='checkbox'
+                                    id='showAccess'> Show access logs</label>
+                            <label style='display:flex;align-items:center;gap:.25rem;'><input type='checkbox'
+                                    id='showPolling'> Show polling logs</label>
+                        </div>
+                        <div class='status-bar' id='logBox'></div>
+                    </div>
+                </section>
+            </aside>
+        </div>
+    </main>
+    <script>
+        const $ = sel => document.querySelector(sel);
+        const escapeHTML = (str = '') => String(str).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+        const decodeHTML = (str = '') => {
+            const txt = document.createElement('textarea');
+            txt.innerHTML = str;
+            return txt.value;
+        };
+        // Theme toggle
+        const rootEl = document.documentElement;
+        const savedTheme = localStorage.getItem('theme-mode');
+        if (savedTheme === 'light') rootEl.classList.add('light');
+        const themeBtn = document.getElementById('themeToggle');
+        const logsToggle = document.getElementById('logsToggle');
+        const resizer = document.getElementById('sidebarResizer');
+        function applyTheme() {
+            if (rootEl.classList.contains('light')) {
+                localStorage.setItem('theme-mode', 'light');
+                themeBtn.textContent = '🌙 Dark';
+            } else {
+                localStorage.setItem('theme-mode', 'dark');
+                themeBtn.textContent = '🌞 Light';
+            }
+        }
+        applyTheme();
+        // Ensure sidebar fills the full viewport height beneath the sticky header
+        function updateHeaderHeight() {
+            const headerEl = document.querySelector('header');
+            if (!headerEl) return;
+            const h = Math.round(headerEl.getBoundingClientRect().height);
+            document.documentElement.style.setProperty('--header-height', h + 'px');
+        }
+        updateHeaderHeight();
+        window.addEventListener('resize', updateHeaderHeight);
+        // Logs sidebar toggle with persistence
+        function applyLogsCollapsed(collapsed) {
+            if (collapsed) { rootEl.classList.add('logs-collapsed'); } else { rootEl.classList.remove('logs-collapsed'); }
+            localStorage.setItem('logs-collapsed', collapsed ? '1' : '0');
+        }
+        const savedLogsState = localStorage.getItem('logs-collapsed');
+        const defaultCollapse = window.matchMedia && window.matchMedia('(max-width: 980px)').matches;
+        applyLogsCollapsed(savedLogsState === null ? defaultCollapse : savedLogsState === '1');
+        logsToggle.addEventListener('click', () => {
+            const nowCollapsed = !rootEl.classList.contains('logs-collapsed');
+            applyLogsCollapsed(nowCollapsed);
+        });
+        // Sidebar resizing (drag)
+        function setSidebarWidth(px) {
+            const min = 260; const max = Math.max(min, Math.floor(window.innerWidth * 0.6));
+            const clamped = Math.max(min, Math.min(max, px));
+            document.documentElement.style.setProperty('--sidebar-width', clamped + 'px');
+            localStorage.setItem('logs-sidebar-width', String(clamped));
+        }
+        // Initialize width from storage if present
+        const savedWidth = parseInt(localStorage.getItem('logs-sidebar-width') || '0', 10);
+        if (savedWidth > 0) document.documentElement.style.setProperty('--sidebar-width', savedWidth + 'px');
+        let dragging = false; let startX = 0; let startWidth = 0;
+        function onMove(e) {
+            if (!dragging) return;
+            const clientX = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+            const layoutRect = document.querySelector('.layout').getBoundingClientRect();
+            const contentRightX = layoutRect.right - startWidth; // initial divider position
+            const delta = clientX - contentRightX;
+            const newWidth = startWidth - delta;
+            setSidebarWidth(newWidth);
+        }
+        function onUp() { dragging = false; document.body.classList.remove('resizing'); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp); }
+        function onDown(e) { if (rootEl.classList.contains('logs-collapsed')) return; dragging = true; document.body.classList.add('resizing'); startX = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX); startWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 380; window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onUp); e.preventDefault(); }
+        resizer.addEventListener('mousedown', onDown);
+        resizer.addEventListener('touchstart', onDown, { passive: false });
+        themeBtn.addEventListener('click', () => { rootEl.classList.toggle('light'); applyTheme(); });
+    const logBox = $('#logBox');
+    let logSeq = 0;
+    let storageBackend = 'local';
+    const epubBody = $('#epubBody');
+    let currentItems = [];
+        const selectAll = $('#selectAll');
+        const downloadSelBtn = $('#downloadSelBtn');
+        const deleteSelBtn = $('#deleteSelBtn');
+        const downloadAllBtn = $('#downloadAllBtn');
+        const deleteAllBtn = $('#deleteAllBtn');
+        const refreshBtn = $('#refreshBtn');
+
+        const showAccessCb = document.getElementById('showAccess');
+        const showPollingCb = document.getElementById('showPolling');
+        showAccessCb.checked = false; // default hide access
+        showPollingCb.checked = false; // default hide polling
+
+        function classify(line) {
+            // Access log heuristic (Uvicorn default format starting with IP and method)
+            if (/\bGET \/logs\?since=/i.test(line)) return 'polling';
+            if (/(GET|POST|DELETE|PUT|HEAD) \/[^ ]* HTTP\//.test(line)) return 'access';
+            if (/error|traceback/i.test(line)) return 'error';
+            if (/warn/i.test(line)) return 'warn';
+            return 'info';
+        }
+
+        function log(msg, type = 'info', rawTypeHint = null) {
+            const effectiveType = rawTypeHint || classify(msg);
+            if (effectiveType === 'access' && !showAccessCb.checked) return;
+            if (effectiveType === 'polling' && !showPollingCb.checked) return;
+            const ts = new Date().toISOString().split('T')[1].replace('Z', '');
+            const span = document.createElement('div');
+            const level = (effectiveType === 'error' ? 'err' : (effectiveType === 'warn' ? 'warn' : 'info'));
+            span.className = 'log-' + level;
+            span.textContent = `[${ts}] ${msg}`;
+            logBox.appendChild(span);
+            // Keep only last ~1200 nodes
+            while (logBox.childNodes.length > 1200) logBox.removeChild(logBox.firstChild);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        showAccessCb.addEventListener('change', () => { });
+        showPollingCb.addEventListener('change', () => { });
+
+        let ws;
+        let wsActive = false;
+        function initWebSocket() {
+            try {
+                const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+                ws = new WebSocket(`${proto}://${location.host}/ws/logs`);
+                ws.onopen = () => { wsActive = true; log('WebSocket log stream connected'); };
+                ws.onclose = () => { wsActive = false; log('WebSocket closed; falling back to polling', 'warn'); setTimeout(() => { if (!wsActive) initWebSocket(); }, 4000); };
+                ws.onerror = () => { /* errors handled by close */ };
+                ws.onmessage = (evt) => {
+                    try {
+                        const data = JSON.parse(evt.data);
+                        if (Array.isArray(data.lines)) {
+                            for (const obj of data.lines) { logSeq = Math.max(logSeq, obj.seq); log(obj.line); }
+                        } else if (data.seq && data.line) { logSeq = Math.max(logSeq, data.seq); log(data.line); }
+                    } catch (e) { /* ignore malformed */ }
+                };
+            } catch (e) { log('WebSocket init failed: ' + e.message, 'warn'); }
+        }
+        initWebSocket();
+
+        async function pollLogs() {
+            if (wsActive) { setTimeout(pollLogs, 5000); return; }
+            try {
+                const r = await fetch(`/logs?since=${logSeq}`);
+                if (r.ok) {
+                    const j = await r.json();
+                    if (j.ok && j.data && j.data.lines) {
+                        for (const { seq, line } of j.data.lines) {
+                            logSeq = Math.max(logSeq, seq);
+                            log(line);
+                        }
+                        if (j.data.next) logSeq = j.data.next;
+                    }
+                }
+            } catch (_e) { /* silent */ }
+            finally { setTimeout(pollLogs, 1000); }
+        }
+
+        async function fetchJSON(url, opts = {}) {
+            const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+            if (!r.ok) {
+                let txt = await r.text();
+                throw new Error(`HTTP ${r.status}: ${txt}`);
+            }
+            return r.json();
+        }
+
+            async function loadConfig() {
+                try {
+                    const cfg = await fetchJSON('/config');
+                    if (cfg && cfg.data && cfg.data.storage_backend) {
+                        storageBackend = cfg.data.storage_backend;
+                        log(`Storage backend: ${storageBackend}`);
+                    }
+                } catch (err) {
+                    log('Config load failed: ' + err.message, 'warn');
+                }
+            }
+
+        function selectedItems() {
+            return [...document.querySelectorAll('tbody input.sel:checked')].map(c => ({
+                mode: c.dataset.mode || 'local',
+                name: c.dataset.name || '',
+                key: c.dataset.key || c.dataset.name || '',
+                id: c.dataset.id ? parseInt(c.dataset.id, 10) : null,
+                title: c.dataset.title || c.dataset.name || '',
+                url: c.dataset.url || '',
+            }));
+        }
+
+        function updateSelectionState() {
+            const any = selectedItems().length > 0;
+            downloadSelBtn.disabled = !any;
+            deleteSelBtn.disabled = !any;
+        }
+
+        let currentPage = 1;
+        async function loadList(page = 1) {
+            try {
+                const pageSize = parseInt($('#pageSize').value) || 20;
+                const offset = (page - 1) * pageSize;
+                const data = await fetchJSON(`/epubs?offset=${offset}&limit=${pageSize}`);
+                const payload = (data && data.data) || {};
+                let items = Array.isArray(payload.epubs) ? payload.epubs : [];
+                const total = typeof payload.total === 'number' ? payload.total : items.length;
+                currentItems = items;
+                if (!items.length) {
+                    epubBody.innerHTML = `<tr><td colspan='3' style='padding:1rem;opacity:.5;'>No EPUBs found.</td></tr>`;
+                } else if (storageBackend === 'local') {
+                    epubBody.innerHTML = items.map(name => {
+                        const display = escapeHTML(name);
+                        return `
+                        <tr>
+                            <td><input type='checkbox' class='sel' data-mode='local' data-name='${display}' data-title='${display}'></td>
+                            <td>${display}</td>
+                            <td><button class='secondary download-btn'>Download</button></td>
+                        </tr>
+                    `;
+                    }).join('');
+                } else {
+                    epubBody.innerHTML = items.map(item => {
+                        const title = item?.title || item?.storage_key || 'untitled';
+                        const status = item?.status || 'unknown';
+                        const size = item?.file_size ? ` • ${(item.file_size / (1024 * 1024)).toFixed(2)} MB` : '';
+                        return `
+                            <tr>
+                                <td><input type='checkbox' class='sel' data-mode='remote' data-name='${escapeHTML(title)}' data-title='${escapeHTML(title)}' data-key='${escapeHTML(item?.storage_key || '')}' data-id='${item?.id ?? ''}' data-url='${escapeHTML(item?.storage_url || '')}'></td>
+                                <td>
+                                    <div style='font-weight:600;'>${escapeHTML(title)}</div>
+                                    <div style='font-size:.75rem;opacity:.7;'>${escapeHTML(item?.storage_key || '')}</div>
+                                    <div style='font-size:.7rem;opacity:.6;'>${escapeHTML(status)}${size}</div>
+                                </td>
+                                <td><button class='secondary download-btn'>Download</button></td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+
+                epubBody.querySelectorAll('input.sel').forEach(cb => cb.addEventListener('change', updateSelectionState));
+                epubBody.querySelectorAll('button.download-btn').forEach(btn => btn.addEventListener('click', e => {
+                    e.preventDefault();
+                    const cb = btn.closest('tr')?.querySelector('input.sel');
+                    if (cb) downloadEntry({ ...cb.dataset });
+                }));
+
+                const pager = $('#pager');
+                const pages = Math.max(1, Math.ceil(total / pageSize));
+                currentPage = Math.min(page, pages);
+                const btn = (p, label = undefined) => `<button class='secondary' data-page='${p}' ${p === currentPage ? 'disabled' : ''}>${label || p}</button>`;
+                let html = '';
+                if (pages > 1) {
+                    html += btn(Math.max(1, currentPage - 1), '‹');
+                    const windowSize = 5;
+                    let start = Math.max(1, currentPage - 2);
+                    let end = Math.min(pages, start + windowSize - 1);
+                    if (end - start < windowSize - 1) start = Math.max(1, end - windowSize + 1);
+                    if (start > 1) html += btn(1, '1') + (start > 2 ? '<span style="opacity:.5;">…</span>' : '');
+                    for (let p = start; p <= end; p++) html += btn(p);
+                    if (end < pages) html += (end < pages - 1 ? '<span style="opacity:.5;">…</span>' : '') + btn(pages, String(pages));
+                    html += btn(Math.min(pages, currentPage + 1), '›');
+                }
+                pager.innerHTML = html;
+                pager.querySelectorAll('button[data-page]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); loadList(parseInt(b.dataset.page)); }));
+                updateSelectionState();
+            } catch (e) { log('List error: ' + e.message, 'error'); }
+        }
+
+        async function generate(e) {
+            e.preventDefault();
+            const btn = $('#genBtn');
+            const cancelBtn = $('#cancelBtn');
+            const stopBtn = $('#stopBtn');
+            const originalHTML = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<span class='spinner'></span> Generating...`;
+            cancelBtn.disabled = false;
+            stopBtn.disabled = true; // enable after chapters fetch begins
+            log('Starting generation...');
+            try {
+                const payload = {
+                    url: $('#url').value.trim(),
+                    chapters_per_book: parseInt($('#chapters_per_book').value) || 500,
+                    chapter_workers: parseInt($('#chapter_workers').value) || 0,
+                    chapter_limit: parseInt($('#chapter_limit').value) || 0,
+                    start_chapter: parseInt($('#start_chapter').value) || 1
+                };
+                // kick off generation
+                stopBtn.disabled = false;
+                const res = await fetchJSON('/epub/generate', { method: 'POST', body: JSON.stringify(payload) });
+                if (storageBackend === 'local') {
+                    const filenames = (res.data && res.data.filenames) || [];
+                    log('Generation complete. Files: ' + (filenames.length ? filenames.join(', ') : 'n/a'));
+                } else {
+                    const record = res.data && res.data.epub;
+                    if (record) {
+                        log(`Generation complete. Stored as ${record.storage_key}`);
+                    } else {
+                        log('Generation complete.');
+                    }
+                }
+                if (res.data) {
+                    if (res.data.log_lines) {
+                        for (const line of res.data.log_lines) log(line);
+                    } else if (res.data.summary) {
+                        log('--- Chapter Summary ---');
+                        for (const line of res.data.summary) log(line);
+                    }
+                }
+                await loadList();
+            } catch (e) {
+                if (/cancel/i.test(e.message)) {
+                    log('Generation cancelled by user.', 'warn');
+                } else {
+                    log('Generation failed: ' + e.message, 'error');
+                }
+            }
+            finally { btn.disabled = false; btn.innerHTML = originalHTML; cancelBtn.disabled = true; stopBtn.disabled = true; }
+        }
+
+        document.getElementById('cancelBtn').addEventListener('click', async (e) => {
+            e.preventDefault();
+            try {
+                await fetchJSON('/epub/cancel', { method: 'POST', body: JSON.stringify({}) });
+                log('Cancellation requested...', 'warn');
+                $('#cancelBtn').disabled = true;
+            } catch (err) { log('Cancel failed: ' + err.message, 'error'); }
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', async (e) => {
+            e.preventDefault();
+            try {
+                await fetchJSON('/epub/stop', { method: 'POST', body: JSON.stringify({}) });
+                log('Stop requested — will finish current chapter and build partial EPUB.', 'warn');
+                $('#stopBtn').disabled = true;
+            } catch (err) { log('Stop failed: ' + err.message, 'error'); }
+        });
+
+        async function downloadEntry(data) {
+            const mode = data.mode || storageBackend;
+            if (mode === 'local') {
+                const name = data.name || data.title;
+                if (!name) return;
+                log('Downloading ' + name + '...');
+                try {
+                    const r = await fetch('/epub/download?name=' + encodeURIComponent(name));
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const blob = await r.blob();
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob); a.download = name; a.click();
+                    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+                } catch (err) { log('Download failed: ' + err.message, 'error'); }
+                return;
+            }
+
+            const key = data.key || '';
+            if (!key) {
+                log('Missing storage key for download', 'error');
+                return;
+            }
+            const display = data.title || key;
+            log('Downloading ' + display + '...');
+            try {
+                const r = await fetch('/epubs/download/one', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key })
+                });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const blob = await r.blob();
+                const a = document.createElement('a');
+                const filename = key.split('/').pop() || (display.replace(/\s+/g, '_') + '.epub');
+                a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+            } catch (err) { log('Download failed: ' + err.message, 'error'); }
+        }
+
+        async function downloadSelected() {
+            const items = selectedItems(); if (!items.length) return;
+            log('Downloading ' + items.length + ' selected as zip...');
+            try {
+                if (storageBackend === 'local') {
+                    const names = items.map(item => item.name).filter(Boolean);
+                    const r = await fetch('/epub/download-many', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ names })
+                    });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const blob = await r.blob();
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'epubs.zip'; a.click();
+                    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+                } else {
+                    const keys = items.map(item => item.key).filter(Boolean);
+                    const r = await fetch('/epubs/download/many', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ keys })
+                    });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const blob = await r.blob();
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'epubs.zip'; a.click();
+                    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+                }
+            } catch (err) { log('Multi-download failed: ' + err.message, 'error'); }
+        }
+
+        async function downloadAll() {
+            log('Downloading ALL as zip...');
+            try {
+                const url = storageBackend === 'local' ? '/epub/download-all' : '/epubs/download/all';
+                const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: storageBackend === 'local' ? JSON.stringify({}) : JSON.stringify({}) });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const blob = await r.blob();
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'all_epubs.zip'; a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+            } catch (err) { log('Download-all failed: ' + err.message, 'error'); }
+        }
+
+        async function deleteSelected() {
+            const items = selectedItems(); if (!items.length) return;
+            if (!confirm('Delete ' + items.length + ' file(s)?')) return;
+            try {
+                if (storageBackend === 'local') {
+                    const names = items.map(item => item.name).filter(Boolean);
+                    const r = await fetch('/epub', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }) });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                } else {
+                    for (const item of items) {
+                        if (!item.id) continue;
+                        const r = await fetch(`/epubs/${item.id}`, { method: 'DELETE' });
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                    }
+                }
+                log('Deleted selected.');
+                await loadList(currentPage);
+            } catch (err) { log('Delete failed: ' + err.message, 'error'); }
+        }
+        async function deleteAll() {
+            if (!confirm('Delete ALL EPUB files?')) return;
+            try {
+                if (storageBackend === 'local') {
+                    const r = await fetch('/epub/all', { method: 'DELETE' });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                } else {
+                    for (const entry of currentItems) {
+                        if (!entry || typeof entry.id === 'undefined') continue;
+                        const r = await fetch(`/epubs/${entry.id}`, { method: 'DELETE' });
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                    }
+                }
+                log('Deleted all EPUBs.');
+                await loadList(1);
+            } catch (err) { log('Delete all failed: ' + err.message, 'error'); }
+        }
+
+        document.getElementById('genForm').addEventListener('submit', generate);
+        refreshBtn.addEventListener('click', e => { e.preventDefault(); loadList(currentPage); });
+        document.getElementById('pageSize').addEventListener('change', () => loadList(1));
+        downloadSelBtn.addEventListener('click', e => { e.preventDefault(); downloadSelected(); });
+        downloadAllBtn.addEventListener('click', e => { e.preventDefault(); downloadAll(); });
+        deleteSelBtn.addEventListener('click', e => { e.preventDefault(); deleteSelected(); });
+        deleteAllBtn.addEventListener('click', e => { e.preventDefault(); deleteAll(); });
+        selectAll.addEventListener('change', () => { document.querySelectorAll('tbody input.sel').forEach(cb => { cb.checked = selectAll.checked; }); updateSelectionState(); });
+
+        loadList();
+        pollLogs();
+    </script>
+</body>
+
+</html>

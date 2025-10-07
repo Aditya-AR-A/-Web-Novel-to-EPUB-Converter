@@ -1,0 +1,718 @@
+diff --git a/.gitignore b/.gitignore
+index 8398e4b..0944b97 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,4 +1,10 @@
+ /media
+ /books
+ *.epub
+-*.png
+\ No newline at end of file
++*.png
++noveltoepub-1bc34ee7140e.json
++*.env
++*.venv/
++__pycache__/
++*.pyc
++*.pyo
+\ No newline at end of file
+diff --git a/README.md b/README.md
+index 24c993e..af94cdb 100644
+--- a/README.md
++++ b/README.md
+@@ -1,8 +1,8 @@
+ # 📚 Web Novel to EPUB Converter
+ 
+-FastAPI-based web service that scrapes full novels from [FreeWebNovel](https://freewebnovel.com), converts them into polished EPUB files, and persists both metadata and files using **SQLite** (or any SQLAlchemy-compatible database) plus **Amazon S3**.
++FastAPI-based web service that scrapes full novels from [FreeWebNovel](https://freewebnovel.com), converts them into polished EPUB files, and persists both metadata and files using **SQLite** (or any SQLAlchemy-compatible database) plus **Google Drive**.
+ 
+-The project is designed for stateless deployments such as HuggingFace Spaces. Generated EPUBs survive restarts because they are stored in S3, while metadata is kept in a relational database for quick lookups.
++The project is designed for stateless deployments such as HuggingFace Spaces. Generated EPUBs survive restarts because they are stored in Google Drive, while metadata is kept in a relational database for quick lookups.
+ 
+ ---
+ 
+@@ -12,7 +12,7 @@ The project is designed for stateless deployments such as HuggingFace Spaces. Ge
+ - EPUB generation with clean styling, TOC, intro page, metadata tiles, and embedded cover art.
+ - REST API (FastAPI) exposing endpoints to generate, list, download (single/many/all), and delete EPUBs.
+ - Persistent metadata via SQLAlchemy ORM models (default SQLite database under `data/epubs.db`).
+-- Durable file storage on AWS S3 with presigned download URLs and streaming download endpoints.
++- Durable file storage on Google Drive with shared download links and streaming download endpoints.
+ - Modular architecture (`app/`) grouping configuration, database, services, routers, schemas, and storage adapters.
+ 
+ ---
+@@ -35,7 +35,7 @@ The project is designed for stateless deployments such as HuggingFace Spaces. Ge
+ │   ├── services/
+ │   │   └── epub_service.py    # High-level orchestration logic
+ │   └── storage/
+-│       └── s3.py              # S3 client wrapper with fail-safes
++│       └── google_drive.py    # Google Drive client wrapper with sharing helpers
+ ├── scripts/                   # Scraping + EPUB conversion helpers (existing logic)
+ ├── media/                     # Sample cover assets
+ ├── books/                     # Legacy local output (optional)
+@@ -48,7 +48,7 @@ The project is designed for stateless deployments such as HuggingFace Spaces. Ge
+ ## ⚙️ Requirements & Installation
+ 
+ - Python 3.10+
+-- Dependencies (see `requirements.txt`): `fastapi`, `uvicorn`, `sqlalchemy`, `boto3`, `python-multipart`, plus scraping libraries (`requests`, `beautifulsoup4`, `ebooklib`, `PySocks`, `PyYAML`).
++- Dependencies (see `requirements.txt`): `fastapi`, `uvicorn`, `sqlalchemy`, Google Drive SDK libraries (`google-api-python-client`, `google-auth`, `google-auth-httplib2`, `google-auth-oauthlib`), `python-multipart`, plus scraping libraries (`requests`, `beautifulsoup4`, `ebooklib`, `PySocks`, `PyYAML`).
+ 
+ ```bash
+ python -m venv .venv
+@@ -64,22 +64,20 @@ Environment variables (or `.env`) drive runtime configuration via `app/config.py
+ 
+ | Variable | Required | Default | Description |
+ | --- | --- | --- | --- |
+-| `AWS_S3_BUCKET` | ✅ | — | Target bucket that stores generated EPUBs. |
+-| `AWS_REGION` | ❌ | `us-east-1` | AWS region for the S3 bucket. |
+-| `AWS_ACCESS_KEY_ID` | ❌ | — | Access key for S3. Use IAM role/instance profile if omitted. |
+-| `AWS_SECRET_ACCESS_KEY` | ❌ | — | Secret key for S3. |
++| `GOOGLE_SERVICE_ACCOUNT_FILE` | ❌ | — | Path to the service account JSON credentials used to access Google Drive. |
++| `GOOGLE_SERVICE_ACCOUNT_JSON` | ❌ | — | Inline JSON for the service account (use instead of the file path in secret-aware deployments). |
++| `GOOGLE_DRIVE_FOLDER_ID` | ❌ | — | Optional folder ID where EPUBs should be stored (root drive if omitted). |
++| `GOOGLE_IMPERSONATED_USER` | ❌ | — | Optional domain user to impersonate when using a Workspace service account. |
+ | `DATABASE_URL` | ❌ | `sqlite:///data/epubs.db` | SQLAlchemy database URL. |
+-| `S3_PRESIGN_EXPIRATION` | ❌ | `3600` | Seconds a presigned URL remains valid. |
+ 
+ Example `.env` for local development:
+ 
+ ```env
+-AWS_S3_BUCKET=my-epub-bucket
+-AWS_REGION=us-east-1
+-AWS_ACCESS_KEY_ID=xxxxxxxx
+-AWS_SECRET_ACCESS_KEY=yyyyyyyy
++GOOGLE_SERVICE_ACCOUNT_FILE=/workspaces/web-novel-converter/service-account.json
++GOOGLE_DRIVE_FOLDER_ID=1AbCdEfGh1234567890
+ DATABASE_URL=sqlite:///data/epubs.db
+-S3_PRESIGN_EXPIRATION=3600
++# Optional: only for Google Workspace domain-wide delegation
++# GOOGLE_IMPERSONATED_USER=you@domain.com
+ ```
+ 
+ For HuggingFace Spaces, store secrets using the built-in **Repository Secrets** UI so they remain encrypted.
+@@ -100,7 +98,7 @@ uvicorn api:app --host 0.0.0.0 --port 8000
+ On startup the app:
+ 
+ - Creates database tables (`EpubMetadata`).
+-- Verifies S3 configuration by generating a short-lived presigned URL.
++- Verifies Google Drive credentials by listing the configured folder (or the root drive).
+ 
+ ---
+ 
+@@ -108,22 +106,22 @@ On startup the app:
+ 
+ | Method | Endpoint | Description |
+ | --- | --- | --- |
+-| `POST` | `/epubs/generate` | Scrape a novel, build an EPUB, upload to S3, and return metadata. |
++| `POST` | `/epubs/generate` | Scrape a novel, build an EPUB, upload to Google Drive, and return metadata. |
+ | `GET` | `/epubs/` | List stored EPUB metadata records. |
+ | `GET` | `/epubs/{ebook_id}` | Retrieve metadata for a single EPUB by ID. |
+-| `DELETE` | `/epubs/{ebook_id}` | Delete EPUB metadata and the S3 object. |
+-| `POST` | `/epubs/download` | Stream a single EPUB (via S3 object key). |
++| `DELETE` | `/epubs/{ebook_id}` | Delete EPUB metadata and the Google Drive file. |
++| `POST` | `/epubs/download` | Stream a single EPUB (via Google Drive file ID). |
+ | `POST` | `/epubs/download/many` | Stream multiple EPUBs zipped together. |
+ | `POST` | `/epubs/download/all` | Stream every stored EPUB in one ZIP. |
+ 
+-Responses include the S3 key and a presigned download URL so clients can fetch files directly without proxying through the API if preferred.
++Responses include the Google Drive file ID plus a shareable download URL so clients can fetch files directly without proxying through the API if preferred.
+ 
+ ---
+ 
+ ## 🗃️ Storage Strategy
+ 
+-- **Database (SQLite by default):** Stores metadata such as title, author, original source URL, S3 key, presigned URL, file size, status, and error messages.
+-- **S3:** Stores the binary EPUB files using keys like `epubs/<slug>-<unique-id>.epub`. All download endpoints stream from S3 or return presigned URLs. The app never relies on ephemeral local filesystem beyond temporary generation directories.
++- **Database (SQLite by default):** Stores metadata such as title, author, original source URL, Google Drive file ID, download URL, file size, status, and error messages.
++- **Google Drive:** Stores the binary EPUB files using meaningful filenames. Download endpoints stream from Drive or rely on the shared download URL. The app never relies on the ephemeral local filesystem beyond temporary generation directories.
+ 
+ To switch databases (e.g., PostgreSQL, MySQL), update `DATABASE_URL`. SQLAlchemy handles the rest.
+ 
+@@ -133,6 +131,8 @@ To switch databases (e.g., PostgreSQL, MySQL), update `DATABASE_URL`. SQLAlchemy
+ 
+ - Existing scraping and conversion utilities remain under `scripts/`. The service layer orchestrates them while handling temp files, cover uploads, and error propagation.
+ - When adding new storage backends (e.g., Azure Blob, Google Cloud Storage), implement another adapter under `app/storage/` and swap the dependency injection accordingly.
++- Multi-volume EPUB exports now use filenames that encode the chapter range (e.g., `novel_title 1-500.epub`) instead of Roman numerals.
++- Google Drive credentials can be supplied either as a file path (`GOOGLE_SERVICE_ACCOUNT_FILE`) or as inline JSON (`GOOGLE_SERVICE_ACCOUNT_JSON`); the service will automatically choose whichever is provided.
+ - Run `python -m compileall app api.py` before deployment to catch syntax issues quickly.
+ 
+ ---
+diff --git a/__pycache__/api.cpython-311.pyc b/__pycache__/api.cpython-311.pyc
+index b25dbde..4cc48ac 100644
+Binary files a/__pycache__/api.cpython-311.pyc and b/__pycache__/api.cpython-311.pyc differ
+diff --git a/api.py b/api.py
+index d6392ac..be23f54 100644
+--- a/api.py
++++ b/api.py
+@@ -7,7 +7,7 @@ from fastapi import FastAPI
+ from app.config import get_settings
+ from app.db import Base, engine
+ from app.routers import epub_router
+-from app.storage import get_s3_storage
++from app.storage import get_drive_storage
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -15,8 +15,8 @@ settings = get_settings()
+ 
+ app = FastAPI(
+     title="Web Novel to EPUB Converter API",
+-    description="Scrape web novels, convert them into EPUB files, and manage downloads backed by AWS S3 storage.",
+-    version="2.0.0",
++    description="Scrape web novels, convert them into EPUB files, and manage downloads backed by Google Drive storage.",
++    version="2.1.0",
+ )
+ 
+ 
+@@ -24,11 +24,11 @@ app = FastAPI(
+ def on_startup() -> None:
+     Base.metadata.create_all(bind=engine)
+     try:
+-        storage = get_s3_storage()
+-        storage.generate_presigned_url("healthcheck", expires_in=1)
++        storage = get_drive_storage()
++        storage.health_check()
+     except Exception as exc:  # pragma: no cover - defensive guard
+         logger.exception("Failed to initialize storage layer")
+-        raise RuntimeError("S3 storage initialization failed") from exc
++        raise RuntimeError("Google Drive storage initialization failed") from exc
+ 
+ 
+ @app.get("/")
+diff --git a/app/__pycache__/config.cpython-311.pyc b/app/__pycache__/config.cpython-311.pyc
+index c9282b8..1186095 100644
+Binary files a/app/__pycache__/config.cpython-311.pyc and b/app/__pycache__/config.cpython-311.pyc differ
+diff --git a/app/config.py b/app/config.py
+index ede1c1f..2162a4b 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -2,24 +2,23 @@ from functools import lru_cache
+ from pathlib import Path
+ from typing import Optional
+ 
+-from pydantic import BaseSettings, Field
++from pydantic_settings import BaseSettings
++from pydantic import Field
+ 
+ 
+ class Settings(BaseSettings):
+     """Application configuration loaded from environment variables."""
+ 
+-    aws_access_key_id: Optional[str] = Field(default=None, env="AWS_ACCESS_KEY_ID")
+-    aws_secret_access_key: Optional[str] = Field(default=None, env="AWS_SECRET_ACCESS_KEY")
+-    aws_region: str = Field(default="us-east-1", env="AWS_REGION")
+-    aws_s3_bucket: str = Field(..., env="AWS_S3_BUCKET")
++    google_service_account_file: Optional[Path] = Field(default=None, env="GOOGLE_SERVICE_ACCOUNT_FILE")
++    google_service_account_json: Optional[str] = Field(default=None, env="GOOGLE_SERVICE_ACCOUNT_JSON")
++    google_drive_folder_id: Optional[str] = Field(default=None, env="GOOGLE_DRIVE_FOLDER_ID")
++    google_impersonated_user: Optional[str] = Field(default=None, env="GOOGLE_IMPERSONATED_USER")
+ 
+     database_url: str = Field(
+         default=f"sqlite:///{Path.cwd() / 'data' / 'epubs.db'}",
+         env="DATABASE_URL",
+     )
+ 
+-    s3_presign_expiration: int = Field(default=3600, env="S3_PRESIGN_EXPIRATION")
+-
+     class Config:
+         env_file = ".env"
+         env_file_encoding = "utf-8"
+diff --git a/app/db/__pycache__/models.cpython-311.pyc b/app/db/__pycache__/models.cpython-311.pyc
+index 0919455..27af175 100644
+Binary files a/app/db/__pycache__/models.cpython-311.pyc and b/app/db/__pycache__/models.cpython-311.pyc differ
+diff --git a/app/db/models.py b/app/db/models.py
+index 853b5ef..747746d 100644
+--- a/app/db/models.py
++++ b/app/db/models.py
+@@ -15,8 +15,9 @@ class EpubMetadata(Base):
+     title: str = Column(String(255), nullable=False)
+     author: Optional[str] = Column(String(255), nullable=True)
+     source_url: str = Column(Text, nullable=False)
+-    s3_key: str = Column(String(512), nullable=False, unique=True, index=True)
+-    s3_url: str = Column(Text, nullable=False)
++    storage_file_name: str = Column(String(512), nullable=False)
++    storage_file_id: Optional[str] = Column(String(256), nullable=True, unique=True, index=True)
++    download_url: Optional[str] = Column(Text, nullable=True)
+     file_size: int = Column(Integer, nullable=False)
+     status: str = Column(String(50), nullable=False, default="ready")
+     error_message: Optional[str] = Column(Text, nullable=True)
+diff --git a/app/routers/__pycache__/epubs.cpython-311.pyc b/app/routers/__pycache__/epubs.cpython-311.pyc
+index 0374aa5..d9dcb4c 100644
+Binary files a/app/routers/__pycache__/epubs.cpython-311.pyc and b/app/routers/__pycache__/epubs.cpython-311.pyc differ
+diff --git a/app/routers/epubs.py b/app/routers/epubs.py
+index 781f1c1..313d0cd 100644
+--- a/app/routers/epubs.py
++++ b/app/routers/epubs.py
+@@ -2,18 +2,12 @@ from __future__ import annotations
+ 
+ import zipfile
+ from io import BytesIO
+-from pathlib import Path
+ from typing import Optional
+ 
+ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
+ from fastapi.responses import JSONResponse, StreamingResponse
+ 
+-from app.schemas import (
+-    DownloadManyRequest,
+-    DownloadOneRequest,
+-    EpubCreateResponse,
+-    EpubListResponse,
+-)
++from app.schemas import DownloadManyRequest, DownloadOneRequest, EpubCreateResponse, EpubListResponse
+ from app.services import EpubService
+ 
+ router = APIRouter(prefix="/epubs", tags=["epubs"])
+@@ -83,12 +77,14 @@ def download_epub(
+     request: DownloadOneRequest,
+     service: EpubService = Depends(get_service),
+ ):
+-    records = service.find_by_keys([request.key])
++    records = service.find_by_file_ids([request.file_id])
+     if not records:
+         raise HTTPException(status_code=404, detail="Epub not found")
+     record = records[0]
+-    buffer = service.download_buffer(record.s3_key)
+-    filename = Path(record.s3_key).name
++    if not record.storage_file_id:
++        raise HTTPException(status_code=404, detail="Epub file missing")
++    buffer = service.download_buffer(record.storage_file_id)
++    filename = (record.storage_file_name or f"{record.title}.epub").replace("/", "_")
+     headers = {"Content-Disposition": f"attachment; filename={filename}"}
+     return StreamingResponse(_stream_bytesio(buffer), media_type="application/epub+zip", headers=headers)
+ 
+@@ -98,22 +94,25 @@ def download_many_epubs(
+     request: DownloadManyRequest,
+     service: EpubService = Depends(get_service),
+ ):
+-    if not request.keys:
+-        raise HTTPException(status_code=400, detail="keys list cannot be empty")
++    if not request.file_ids:
++        raise HTTPException(status_code=400, detail="file_ids list cannot be empty")
+ 
+-    records = service.find_by_keys(request.keys)
++    records = service.find_by_file_ids(request.file_ids)
+     if not records:
+         raise HTTPException(status_code=404, detail="No matching epubs found")
+ 
+-    missing = set(request.keys) - {record.s3_key for record in records}
++    missing = set(request.file_ids) - {record.storage_file_id for record in records if record.storage_file_id}
+     if missing:
+         raise HTTPException(status_code=404, detail=f"Missing epubs: {', '.join(missing)}")
+ 
+     zip_buffer = BytesIO()
+     with zipfile.ZipFile(zip_buffer, "w") as zipf:
+         for record in records:
+-            file_buffer = service.download_buffer(record.s3_key)
+-            zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
++            if not record.storage_file_id:
++                continue
++            file_buffer = service.download_buffer(record.storage_file_id)
++            member_name = (record.storage_file_name or f"{record.title}.epub").replace("/", "_")
++            zipf.writestr(member_name, file_buffer.getvalue())
+     zip_buffer.seek(0)
+ 
+     headers = {"Content-Disposition": "attachment; filename=epubs.zip"}
+@@ -129,8 +128,11 @@ def download_all_epubs(service: EpubService = Depends(get_service)):
+     zip_buffer = BytesIO()
+     with zipfile.ZipFile(zip_buffer, "w") as zipf:
+         for record in records:
+-            file_buffer = service.download_buffer(record.s3_key)
+-            zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
++            if not record.storage_file_id:
++                continue
++            file_buffer = service.download_buffer(record.storage_file_id)
++            member_name = (record.storage_file_name or f"{record.title}.epub").replace("/", "_")
++            zipf.writestr(member_name, file_buffer.getvalue())
+     zip_buffer.seek(0)
+ 
+     headers = {"Content-Disposition": "attachment; filename=all_epubs.zip"}
+diff --git a/app/schemas/__pycache__/epub.cpython-311.pyc b/app/schemas/__pycache__/epub.cpython-311.pyc
+index 141ec47..73c8145 100644
+Binary files a/app/schemas/__pycache__/epub.cpython-311.pyc and b/app/schemas/__pycache__/epub.cpython-311.pyc differ
+diff --git a/app/schemas/epub.py b/app/schemas/epub.py
+index ed200ed..6db8211 100644
+--- a/app/schemas/epub.py
++++ b/app/schemas/epub.py
+@@ -11,15 +11,16 @@ class EpubCreateResponse(BaseModel):
+     title: str
+     author: Optional[str]
+     source_url: AnyUrl
+-    s3_key: str
+-    s3_url: AnyUrl
++    storage_file_name: str
++    storage_file_id: Optional[str]
++    download_url: Optional[AnyUrl]
+     file_size: int
+     status: str
+     created_at: dt.datetime
+     updated_at: dt.datetime
+ 
+     class Config:
+-        orm_mode = True
++        from_attributes = True
+ 
+ 
+ class EpubListResponse(BaseModel):
+@@ -27,8 +28,8 @@ class EpubListResponse(BaseModel):
+ 
+ 
+ class DownloadManyRequest(BaseModel):
+-    keys: List[str]
++    file_ids: List[str]
+ 
+ 
+ class DownloadOneRequest(BaseModel):
+-    key: str
++    file_id: str
+diff --git a/app/services/__pycache__/epub_service.cpython-311.pyc b/app/services/__pycache__/epub_service.cpython-311.pyc
+index 77ef1aa..ba55fc5 100644
+Binary files a/app/services/__pycache__/epub_service.cpython-311.pyc and b/app/services/__pycache__/epub_service.cpython-311.pyc differ
+diff --git a/app/services/epub_service.py b/app/services/epub_service.py
+index 08a7986..ae609cf 100644
+--- a/app/services/epub_service.py
++++ b/app/services/epub_service.py
+@@ -11,7 +11,7 @@ from sqlalchemy import select
+ 
+ from app.db.models import EpubMetadata
+ from app.db.session import get_session
+-from app.storage import get_s3_storage
++from app.storage import StorageUploadResult, get_drive_storage
+ from scripts import convert_to_epub, scraper
+ 
+ 
+@@ -24,7 +24,7 @@ def _slugify(value: str) -> str:
+ 
+ class EpubService:
+     def __init__(self) -> None:
+-        self.storage = get_s3_storage()
++        self.storage = get_drive_storage()
+ 
+     def create_epub(
+         self,
+@@ -39,15 +39,15 @@ class EpubService:
+         slug = _slugify(title)
+         unique_suffix = uuid.uuid4().hex[:8]
+         epub_filename = f"{slug}-{unique_suffix}.epub"
+-        s3_key = f"epubs/{epub_filename}"
+ 
+         with get_session() as session:
+             record = EpubMetadata(
+                 title=title,
+                 author=author,
+                 source_url=url,
+-                s3_key=s3_key,
+-                s3_url="",
++                storage_file_name=epub_filename,
++                storage_file_id=None,
++                download_url=None,
+                 file_size=0,
+                 status="processing",
+             )
+@@ -56,7 +56,7 @@ class EpubService:
+             session.refresh(record)
+ 
+         try:
+-            s3_url, file_size = self._generate_and_upload(
++            upload_result, file_size = self._generate_and_upload(
+                 url=url,
+                 title=title,
+                 author=author,
+@@ -64,7 +64,7 @@ class EpubService:
+                 tags=tags or [],
+                 cover=cover,
+                 epub_filename=epub_filename,
+-                s3_key=s3_key,
++                storage_file_name=epub_filename,
+             )
+         except Exception as exc:
+             with get_session() as session:
+@@ -79,7 +79,8 @@ class EpubService:
+             if not db_record:
+                 raise RuntimeError("Failed to load metadata after generation.")
+             db_record.status = "ready"
+-            db_record.s3_url = s3_url
++            db_record.storage_file_id = upload_result.file_id
++            db_record.download_url = upload_result.download_url
+             db_record.file_size = file_size
+             db_record.error_message = None
+             session.flush()
+@@ -100,25 +101,32 @@ class EpubService:
+             record = session.get(EpubMetadata, ebook_id)
+             if not record:
+                 return False
+-            self.storage.delete_object(record.s3_key)
++            if record.storage_file_id:
++                self.storage.delete_object(record.storage_file_id)
+             session.delete(record)
+             return True
+ 
+-    def find_by_keys(self, keys: List[str]) -> List[EpubMetadata]:
+-        if not keys:
++    def find_by_file_ids(self, file_ids: List[str]) -> List[EpubMetadata]:
++        if not file_ids:
+             return []
+         with get_session() as session:
+-            result = session.execute(select(EpubMetadata).where(EpubMetadata.s3_key.in_(keys)))
++            result = session.execute(
++                select(EpubMetadata).where(EpubMetadata.storage_file_id.in_(file_ids))
++            )
+             return list(result.scalars().all())
+ 
+     def get_all(self) -> List[EpubMetadata]:
+         return self.list_epubs()
+ 
+-    def download_buffer(self, s3_key: str):
+-        return self.storage.download_object(s3_key)
++    def download_buffer(self, file_id: str):
++        if not file_id:
++            raise RuntimeError("Storage file identifier is missing.")
++        return self.storage.download_object(file_id)
+ 
+-    def generate_presigned_url(self, s3_key: str) -> str:
+-        return self.storage.generate_presigned_url(s3_key)
++    def generate_presigned_url(self, file_id: str) -> str:
++        if not file_id:
++            raise RuntimeError("Storage file identifier is missing.")
++        return self.storage.generate_presigned_url(file_id)
+ 
+     def _generate_and_upload(
+         self,
+@@ -130,8 +138,8 @@ class EpubService:
+         tags: List[str],
+         cover: Optional[UploadFile],
+         epub_filename: str,
+-        s3_key: str,
+-    ) -> tuple[str, int]:
++        storage_file_name: str,
++    ) -> tuple[StorageUploadResult, int]:
+         from tempfile import TemporaryDirectory
+ 
+         with TemporaryDirectory() as tmpdir:
+@@ -158,5 +166,5 @@ class EpubService:
+                 metadata=metadata,
+             )
+             file_size = os.path.getsize(epub_path)
+-            s3_url = self.storage.upload_file(epub_path, s3_key)
+-            return s3_url, file_size
++            upload_result = self.storage.upload_file(epub_path, storage_file_name)
++            return upload_result, file_size
+diff --git a/app/storage/__init__.py b/app/storage/__init__.py
+index 245f527..25f005e 100644
+--- a/app/storage/__init__.py
++++ b/app/storage/__init__.py
+@@ -1,3 +1,3 @@
+-from .s3 import S3Storage, get_s3_storage
++from .google_drive import GoogleDriveStorage, StorageUploadResult, get_drive_storage
+ 
+-__all__ = ["S3Storage", "get_s3_storage"]
++__all__ = ["GoogleDriveStorage", "StorageUploadResult", "get_drive_storage"]
+diff --git a/app/storage/__pycache__/__init__.cpython-311.pyc b/app/storage/__pycache__/__init__.cpython-311.pyc
+index 1fce0ca..a2a40e4 100644
+Binary files a/app/storage/__pycache__/__init__.cpython-311.pyc and b/app/storage/__pycache__/__init__.cpython-311.pyc differ
+diff --git a/app/storage/s3.py b/app/storage/s3.py
+index 0fc48e6..15074d9 100644
+--- a/app/storage/s3.py
++++ b/app/storage/s3.py
+@@ -1,79 +1,19 @@
+-from __future__ import annotations
++"""Legacy S3 storage adapter (deprecated).
+ 
+-import logging
+-from functools import lru_cache
+-from io import BytesIO
+-from typing import Optional
++This module exists only to provide a clear error message if legacy imports
++are still in use. The project now relies on the Google Drive storage adapter
++located in :mod:`app.storage.google_drive`.
++"""
+ 
+-import boto3
+-from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
+-
+-from app.config import get_settings
+-
+-logger = logging.getLogger(__name__)
+-
+-
+-class S3Storage:
+-    """Wrapper around S3 client to encapsulate storage operations."""
+ 
++class S3Storage:  # pragma: no cover - legacy compatibility guard
+     def __init__(self) -> None:
+-        settings = get_settings()
+-        if not settings.aws_s3_bucket:
+-            raise RuntimeError("AWS_S3_BUCKET configuration is required.")
+-
+-        self.bucket = settings.aws_s3_bucket
+-        session_kwargs = {}
+-        if settings.aws_access_key_id and settings.aws_secret_access_key:
+-            session_kwargs["aws_access_key_id"] = settings.aws_access_key_id
+-            session_kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
+-        if settings.aws_region:
+-            session_kwargs["region_name"] = settings.aws_region
+-
+-        try:
+-            self._client = boto3.client("s3", **session_kwargs)
+-        except (BotoCoreError, NoCredentialsError) as exc:
+-            raise RuntimeError("Failed to initialize S3 client.") from exc
+-
+-        self._presign_expiration = settings.s3_presign_expiration
+-
+-    def upload_file(self, file_path: str, object_key: str) -> str:
+-        try:
+-            self._client.upload_file(file_path, self.bucket, object_key)
+-        except (ClientError, FileNotFoundError) as exc:
+-            logger.exception("Failed to upload file to S3", extra={"key": object_key})
+-            raise RuntimeError("Failed to upload file to S3") from exc
+-        return self.generate_presigned_url(object_key)
+-
+-    def delete_object(self, object_key: str) -> None:
+-        try:
+-            self._client.delete_object(Bucket=self.bucket, Key=object_key)
+-        except ClientError as exc:
+-            logger.exception("Failed to delete S3 object", extra={"key": object_key})
+-            raise RuntimeError("Failed to delete S3 object") from exc
+-
+-    def download_object(self, object_key: str) -> BytesIO:
+-        buffer = BytesIO()
+-        try:
+-            self._client.download_fileobj(self.bucket, object_key, buffer)
+-        except ClientError as exc:
+-            logger.exception("Failed to download S3 object", extra={"key": object_key})
+-            raise RuntimeError("Failed to download S3 object") from exc
+-        buffer.seek(0)
+-        return buffer
+-
+-    def generate_presigned_url(self, object_key: str, expires_in: Optional[int] = None) -> str:
+-        expiration = expires_in or self._presign_expiration
+-        try:
+-            return self._client.generate_presigned_url(
+-                "get_object",
+-                Params={"Bucket": self.bucket, "Key": object_key},
+-                ExpiresIn=expiration,
+-            )
+-        except ClientError as exc:
+-            logger.exception("Failed to generate presigned URL", extra={"key": object_key})
+-            raise RuntimeError("Failed to generate presigned URL") from exc
++        raise RuntimeError(
++            "AWS S3 storage has been removed. Please migrate to Google Drive storage via app.storage.google_drive."
++        )
+ 
+ 
+-@lru_cache()
+-def get_s3_storage() -> S3Storage:
+-    return S3Storage()
++def get_s3_storage():  # pragma: no cover - legacy compatibility guard
++    raise RuntimeError(
++        "AWS S3 storage has been removed. Please migrate to Google Drive storage via app.storage.google_drive."
++    )
+diff --git a/requirements.txt b/requirements.txt
+index 95e5a3c..e2cb86d 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -7,4 +7,9 @@ fastapi
+ uvicorn
+ python-multipart
+ sqlalchemy
+-boto3
+\ No newline at end of file
++google-api-python-client
++google-auth
++google-auth-httplib2
++google-auth-oauthlib
++pydantic-settings
++psycopg2-binary
+\ No newline at end of file
+diff --git a/scripts/__pycache__/convert_to_epub.cpython-311.pyc b/scripts/__pycache__/convert_to_epub.cpython-311.pyc
+index 6565209..6e0867d 100644
+Binary files a/scripts/__pycache__/convert_to_epub.cpython-311.pyc and b/scripts/__pycache__/convert_to_epub.cpython-311.pyc differ
+diff --git a/scripts/convert_to_epub.py b/scripts/convert_to_epub.py
+index 7eb8270..a117533 100644
+--- a/scripts/convert_to_epub.py
++++ b/scripts/convert_to_epub.py
+@@ -1,24 +1,14 @@
+ from ebooklib import epub
+ import os
+ import math
+-from html import escape as _esc
+-
+-def int_to_roman(input):
+-    if not isinstance(input, int):
+-        raise TypeError("Expected integer")
+-    if not 0 < input < 4000:
+-        raise ValueError("Argument must be between 1 and 3999")
+-    numerals = [
+-        (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+-        (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
+-        (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")
+-    ]
+-    result = ""
+-    for value, numeral in numerals:
+-        while input >= value:
+-            result += numeral
+-            input -= value
+-    return result
++import re
++
++
++def _slugify(value: str) -> str:
++    value = value.lower()
++    value = re.sub(r"[^a-z0-9]+", "_", value)
++    value = re.sub(r"_+", "_", value)
++    return value.strip("_") or "book"
+ 
+ 
+ def to_epub(metadata, chapter_data, chapters_per_book=500):
+@@ -78,24 +68,29 @@ def to_epub(metadata, chapter_data, chapters_per_book=500):
+         if genres_list:
+             genres_html = '<div class="genres">' + ''.join(f'<span class="genre-tile">{g.strip()}</span>' for g in genres_list) + '</div>'
+ 
+-        front_body = f"<div class='front-container'>" + \
+-            (f"<div class='cover'>{cover_img_html}</div>" if cover_img_html else '') + \
+-            f"<h1>{title}</h1>" + \
+-            f"<h2>by {author}</h2>" + \
+-            f"<div class='meta'>" + \
+-            (f"<b>Status:</b> {status} &nbsp; " if status else '') + \
+-            (f"<b>Language:</b> {language} &nbsp; " if language else '') + \
+-            "</div>" + \
+-            genres_html + \
+-            tags_html + \
+-            (f"<div class='synopsis'><b>Synopsis:</b> {synopsis}</div>" if synopsis else '') + \
+-            "</div>"
++        front_body = (
++            "<div class='front-container'>"
++            + (f"<div class='cover'>{cover_img_html}</div>" if cover_img_html else "")
++            + f"<h1>{title}</h1>"
++            + f"<h2>by {author}</h2>"
++            + "<div class='meta'>"
++            + (f"<b>Status:</b> {status} &nbsp; " if status else "")
++            + (f"<b>Language:</b> {language} &nbsp; " if language else "")
++            + "</div>"
++            + genres_html
++            + tags_html
++            + (f"<div class='synopsis'><b>Synopsis:</b> {synopsis}</div>" if synopsis else "")
++            + "</div>"
++        )
+ 
+         front_page = epub.EpubHtml(title="Front Page", file_name="front.xhtml", lang="en")
+         front_page.content = f"<html><head><title>{title} - Front Page</title><style>{style}</style></head><body>{front_body}</body></html>"
+         book.add_item(front_page)
++
+         start_idx = book_index * chapters_per_book
+         end_idx = min(start_idx + chapters_per_book, total_chapters)
++        start_chapter = start_idx + 1
++        end_chapter = end_idx
+         epub_chapters = [front_page]
+ 
+         for idx in range(start_idx, end_idx):
+@@ -119,8 +114,8 @@ def to_epub(metadata, chapter_data, chapters_per_book=500):
+         book.add_item(epub.EpubNcx())
+         book.add_item(epub.EpubNav())
+ 
+-        roman_part = int_to_roman(book_index + 1)
+-        filename = metadata.get('title', 'untitled').replace(" ", "_").replace(":", "_").lower() + f"-{roman_part}.epub"
++        base_name = _slugify(metadata.get('title', 'untitled'))
++        filename = f"{base_name} {start_chapter}-{end_chapter}.epub"
+ 
+         os.makedirs("books", exist_ok=True)
+         epub.write_epub(f'books/{filename}', book, {})
