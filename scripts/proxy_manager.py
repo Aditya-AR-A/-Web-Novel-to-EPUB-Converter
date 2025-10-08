@@ -17,6 +17,12 @@ RETRY_BACKOFF_BASE = float(os.getenv("RETRY_BACKOFF_BASE", "0.6"))
 MAX_BACKOFF = float(os.getenv("MAX_BACKOFF", "4.0"))
 ENABLE_BLOCK_DETECT = os.getenv("ENABLE_BLOCK_DETECT", "1") == "1"
 SHORT_CIRCUIT_ON_FIRST_403 = os.getenv("SHORT_CIRCUIT_ON_FIRST_403", "1") == "1"
+LENIENT_ON_BLOCK = os.getenv("LENIENT_ON_BLOCK", "0") == "1"  # if set, still return response even if flagged blocked
+ADAPTIVE_BLOCK = os.getenv("ADAPTIVE_BLOCK", "1") == "1"  # multi-pass strategy before giving up
+BLOCK_MIN_CONTENT_BYTES = int(os.getenv("BLOCK_MIN_CONTENT_BYTES", "3000"))  # accept if above size even if signals found
+BLOCK_EXPECT_PATTERNS = os.getenv("BLOCK_EXPECT_PATTERNS", "chapter,read,next").lower().split(',')  # keywords that suggest real content
+BLOCK_SIGNAL_MIN_HITS = int(os.getenv("BLOCK_SIGNAL_MIN_HITS", "1"))  # require at least this many block signals to treat as blocked
+BLOCK_ACCEPT_IF_METADATA = os.getenv("BLOCK_ACCEPT_IF_METADATA", "1") == "1"  # allow if core novel metadata markers present
 
 _proxies_lock = threading.Lock()
 _proxies: List[str] = []
@@ -25,6 +31,9 @@ _CACHE_TTL = 300  # seconds to reload proxies.yaml
 _proxy_failures: Dict[str, int] = {}
 _quarantined_until: Dict[str, float] = {}
 _QUARANTINE_SECONDS = 600
+_dead_proxies: Set[str] = set()  # permanently excluded once they hard-fail or block
+
+NEVER_REUSE_FAILED = os.getenv("NEVER_REUSE_FAILED", "1") == "1"
 
 PROXY_YAML_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'proxies.yaml')
 PROXY_CSV_PATH = os.path.join(os.path.dirname(__file__), 'proxy_list.csv')
@@ -96,7 +105,7 @@ def _load_proxies(force: bool = False) -> None:
             else:
                 # Drop any quarantined proxies still within quarantine window
                 now_ts = time.time()
-                filtered = [p for p in dedup if p not in _quarantined_until or _quarantined_until[p] < now_ts]
+                filtered = [p for p in dedup if (p not in _quarantined_until or _quarantined_until[p] < now_ts) and p not in _dead_proxies]
                 _proxies = filtered
             _last_load_time = now
 
@@ -157,13 +166,20 @@ class BlockedError(RuntimeError):
 def _looks_blocked(resp: requests.Response) -> bool:
     if resp.status_code in (401, 403, 429):
         return True
-    # Simple signature scan
-    txt = resp.text.lower()[:8000]
+    txt = resp.text.lower()[:16000]
     signals = [
         'captcha', 'access denied', 'forbidden', 'cloudflare', 'ddos protection',
         'verify you are human', 'just a moment'
     ]
-    return any(s in txt for s in signals)
+    hits = [s for s in signals if s in txt]
+    if len(hits) < BLOCK_SIGNAL_MIN_HITS:
+        return False
+    if BLOCK_ACCEPT_IF_METADATA:
+        # If page already contains strong metadata markers for a novel page, treat as legitimate
+        # Common selectors / tokens: title tag with novel name context, og:novel:author, m-book1 image container
+        if any(k in txt for k in ['og:novel:author', 'og:novel:novel_name', 'm-book1', 'synopsis']):
+            return False
+    return True
 
 
 def fetch_with_proxy_rotation(
@@ -203,7 +219,7 @@ def fetch_with_proxy_rotation(
         else:
             # Build a candidate set avoiding previously attempted and avoid list
             _load_proxies()
-            available = [p for p in _proxies if p not in attempted and p not in avoid]
+            available = [p for p in _proxies if p not in attempted and p not in avoid and p not in _dead_proxies]
             proxy_url = None
             if available:
                 proxy_url = random.choice(available)
@@ -230,7 +246,35 @@ def fetch_with_proxy_rotation(
             resp = requests.get(url, timeout=timeout, proxies=proxies, headers=headers)
             resp.raise_for_status()
             if ENABLE_BLOCK_DETECT and _looks_blocked(resp):
-                raise BlockedError(f"Blocked content detected (status={resp.status_code})")
+                txt_lower = resp.text.lower()
+                size_ok = len(resp.content) >= BLOCK_MIN_CONTENT_BYTES
+                pattern_hits = sum(1 for k in BLOCK_EXPECT_PATTERNS if k and k in txt_lower)
+                adaptive_accept = ADAPTIVE_BLOCK and (size_ok and pattern_hits >= 1)
+                if LENIENT_ON_BLOCK or adaptive_accept:
+                    reason = "LENIENT_ON_BLOCK" if LENIENT_ON_BLOCK else f"ADAPTIVE(size_ok={size_ok}, patterns={pattern_hits})"
+                    print(f"[proxy_manager] Block signals present but accepting via {reason}: {url}")
+                else:
+                    # One extra alternate-UA attempt (once) if adaptive not allowed
+                    alt_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
+                    if 'attempt-alt-ua' not in headers:
+                        headers['User-Agent'] = alt_ua
+                        headers['attempt-alt-ua'] = '1'
+                        try:
+                            resp2 = requests.get(url, timeout=timeout, proxies=proxies, headers=headers)
+                            resp2.raise_for_status()
+                            if ENABLE_BLOCK_DETECT and _looks_blocked(resp2):
+                                raise BlockedError(f"Blocked content detected (status={resp2.status_code}) after alt UA")
+                            print(f"[proxy_manager] Recovered after alt UA for {url}")
+                            if proxy_url and proxy_url in _proxy_failures:
+                                _proxy_failures[proxy_url] = 0
+                            return resp2
+                        except Exception as e_alt:
+                            last_exc = e_alt
+                            # print(f"[proxy_manager] Alt UA retry still blocked: {e_alt}")
+                    if proxy_url and NEVER_REUSE_FAILED:
+                        _dead_proxies.add(proxy_url)
+                        # print(f"[proxy_manager] Marked proxy dead (blocked) {proxy_url}")
+                    raise BlockedError(f"Blocked content detected (status={resp.status_code})")
             if attempt > 0:
                 print(f"[proxy_manager] Success after {attempt+1} attempt(s) using proxy={proxy_url}")
             if proxy_url and proxy_url in _proxy_failures:
@@ -238,20 +282,27 @@ def fetch_with_proxy_rotation(
             return resp
         except BlockedError as e:
             last_exc = e
-            print(f"[proxy_manager] Blocked for {url} proxy={proxy_url}: {e}")
+            # print(f"[proxy_manager] Blocked for {url} proxy={proxy_url}: {e}")
             if proxy_url:
+                if NEVER_REUSE_FAILED:
+                    _dead_proxies.add(proxy_url)
+                    # print(f"[proxy_manager] Permanently disabling blocked proxy {proxy_url}")
                 _proxy_failures[proxy_url] = _proxy_failures.get(proxy_url, 0) - 1
             if SHORT_CIRCUIT_ON_FIRST_403:
                 break
         except Exception as e:
             last_exc = e
-            print(f"[proxy_manager] Attempt {attempt+1}/{retries} failed for {url} proxy={proxy_url}: {e}")
+            # print(f"[proxy_manager] Attempt {attempt+1}/{retries} failed for {url} proxy={proxy_url}: {e}")
             if proxy_url:
-                score = _proxy_failures.get(proxy_url, 0) + 1
-                _proxy_failures[proxy_url] = score
-                if score <= MIN_PROXY_HEALTH:
-                    _quarantined_until[proxy_url] = time.time() + _QUARANTINE_SECONDS
-                    print(f"[proxy_manager] Quarantined {proxy_url} fail_score={score}")
+                if NEVER_REUSE_FAILED:
+                    _dead_proxies.add(proxy_url)
+                    # print(f"[proxy_manager] Permanently disabling failed proxy {proxy_url}")
+                else:
+                    score = _proxy_failures.get(proxy_url, 0) + 1
+                    _proxy_failures[proxy_url] = score
+                    if score <= MIN_PROXY_HEALTH:
+                        _quarantined_until[proxy_url] = time.time() + _QUARANTINE_SECONDS
+                        # print(f"[proxy_manager] Quarantined {proxy_url} fail_score={score}")
         # Backoff with jitter unless last attempt
         if attempt < retries - 1:
             sleep_for = min(MAX_BACKOFF, RETRY_BACKOFF_BASE * (2 ** attempt))

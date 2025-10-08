@@ -1,30 +1,23 @@
 from bs4 import BeautifulSoup
 import os
+import sys
+import requests
+from scripts.proxy_manager import fetch_with_proxy_rotation, sample_proxy_pool
+from scripts.cancellation import raise_if_cancelled, raise_if_stopped, is_stopped
+
+from scripts.convert_to_epub import to_epub
+from scripts.get_text_from_html import get_chapter_data
+from urllib.parse import urljoin
 import re
-import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple, Dict
-from urllib.parse import urljoin
-
-from scripts.proxy_manager import fetch_with_proxy_rotation, sample_proxy_pool
-from scripts.get_text_from_html import get_chapter_data
-
-# Import cancellation support (gracefully handle if not available)
-try:
-    from scripts.cancellation import raise_if_cancelled, raise_if_stopped, is_stopped
-except ImportError:
-    def raise_if_cancelled():
-        pass
-    def raise_if_stopped():
-        pass
-    def is_stopped():
-        return False
 
 
 # send the link to first page
 
 origin_url = "https://freewebnovel.com"
 
+from bs4 import BeautifulSoup
 
 def get_chapter_metadata(url):
 
@@ -186,13 +179,7 @@ def list_chapter_urls_from_index(index_url: str) -> List[Tuple[int, str]]:
     return out
 
 
-def get_chapters_concurrent_from_index(
-    index_url: str,
-    *,
-    max_workers: int = 5,
-    limit: int | None = None,
-    start: int = 1,
-) -> Dict[str, List[str]]:
+def get_chapters_concurrent_from_index(index_url: str, *, max_workers: int = 5, limit: int | None = None, start_chapter: int = 1) -> Dict[str, List[str]]:
     """Fetch chapters concurrently using chapter links parsed from the index page.
 
     - Assign a sticky proxy per worker stream to reduce blocks and session churn.
@@ -201,13 +188,13 @@ def get_chapters_concurrent_from_index(
     """
     raise_if_cancelled()
     indexed = list_chapter_urls_from_index(index_url)
-    start = max(1, start)
-    if start > 1:
-        indexed = [pair for pair in indexed if pair[0] >= start]
     if not indexed:
         print("⚠️ No chapter links found on index; falling back to sequential next-links crawl.")
         # Fallback: Follow next links starting from chapter-1 URL
-        return get_chapters_sequential(index_url, start_at=start, limit=limit)
+        return get_chapters_sequential(index_url)
+    # Apply start_chapter filter first (chapters are 1-based numbers in indexed tuples)
+    if start_chapter and start_chapter > 1:
+        indexed = [t for t in indexed if t[0] >= start_chapter]
     if limit and limit > 0:
         indexed = indexed[:limit]
 
@@ -218,15 +205,27 @@ def get_chapters_concurrent_from_index(
     results: Dict[int, Tuple[str, str]] = {}
     failed_stack: List[Tuple[int, str]] = []
 
+    from scripts import proxy_manager as _pm  # local import to access dead proxies
+
     def worker(idx_url_pair: Tuple[int, str], stream_id: int, proxy_override=None):
         raise_if_cancelled()
         idx, url = idx_url_pair
         preferred = proxy_override if proxy_override else (proxy_pool[stream_id % len(proxy_pool)] if proxy_pool else None)
+        # If the preferred proxy has been marked dead, choose a fresh one (or None)
+        try:
+            dead = getattr(_pm, '_dead_proxies', set())
+            if preferred in dead:
+                alt = sample_proxy_pool(1)
+                preferred = alt[0] if alt else None
+        except Exception:
+            pass
         avoid = [p for j, p in enumerate(proxy_pool) if j != (stream_id % len(proxy_pool))]
         next_url, title, text = get_chapter_data(url, preferred_proxy=preferred, avoid_proxies=avoid)
         return idx, title, text
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    ex = ThreadPoolExecutor(max_workers=workers)
+    stop_triggered = False
+    try:
         future_map = {}
         for i, pair in enumerate(indexed):
             future = ex.submit(worker, pair, i)
@@ -235,6 +234,7 @@ def get_chapters_concurrent_from_index(
         for fut in as_completed(future_map):
             raise_if_cancelled()
             if is_stopped():
+                stop_triggered = True
                 break
             try:
                 ch_idx, ch_title, ch_text = fut.result()
@@ -263,13 +263,25 @@ def get_chapters_concurrent_from_index(
                 except Exception as e:
                     print(f"⚠️ Retry failed for chapter {retry_idx}: {e}")
                     failed_stack.append((retry_idx, retry_url))
+    finally:
+        if stop_triggered:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                # cancel_futures not available in older Python
+                ex.shutdown(wait=False)
+        else:
+            ex.shutdown(wait=True)
 
     # Final batch retry for any remaining failed chapters
-    if failed_stack:
+    if failed_stack and not is_stopped():
         print(f"🔁 Final retry for {len(failed_stack)} missed chapters (up to 10 attempts each)")
         for attempt in range(10):
             still_failed = []
             for ch_idx, ch_url in failed_stack:
+                raise_if_cancelled()
+                if is_stopped():
+                    break
                 retry_proxy = sample_proxy_pool(1)[0]
                 try:
                     _, retry_title, retry_text = worker((ch_idx, ch_url), 0, proxy_override=retry_proxy)
@@ -290,122 +302,162 @@ def get_chapters_concurrent_from_index(
     # Build ordered lists; if everything failed (no results), fallback sequentially
     if not results:
         print("⚠️ All concurrent chapter fetches failed; falling back to sequential crawl.")
-        return get_chapters_sequential(index_url, start_at=start, limit=limit)
+        return get_chapters_sequential(index_url)
     ordered_indices = sorted(results.keys())
     titles = [results[i][0] for i in ordered_indices]
     texts = [results[i][1] for i in ordered_indices]
-    return {"title": titles, "text": texts}
+    return {"title": titles, "text": texts, "index": ordered_indices}
 
 
-def get_chapters_sequential(
-    read_first_url: str,
-    *,
-    start_at: int = 1,
-    limit: int | None = None,
-) -> Dict[str, List[str]]:
-    chapter_title_list: List[str] = []
-    chapter_text_list: List[str] = []
+def get_chapters_sequential(read_first_url: str, *, start_chapter: int = 1) -> Dict[str, List[str]]:
+    # Use an index-keyed map to preserve order and allow late insertion from retries
+    results_map: Dict[int, Tuple[str, str]] = {}
+    failed_bucket: List[Tuple[int, str]] = []  # (index, url)
     next_url: str | None = read_first_url
     empty_streak = 0
-    collected = 0
-    start_at = max(1, start_at)
-    valid_seen = 0
+
+    def _guess_next_url(current: str) -> str | None:
+        """Best-effort guess of the next chapter URL by incrementing the chapter number
+        in common patterns like /chapter-16, /chapter_16, or .../chapter-16/.
+
+        Returns absolute URL if a guess is possible, else None.
+        """
+        try:
+            m = re.search(r"(/novel/[^/]+/chapter)([-_])(\d+)(/)?", current, re.IGNORECASE)
+            if not m:
+                return None
+            base, sep, num_s, trail = m.group(1), m.group(2), m.group(3), m.group(4) or ""
+            n = int(num_s) + 1
+            guessed = f"{base}{sep}{n}{trail}"
+            return urljoin(origin_url, guessed)
+        except Exception:
+            return None
+
+    def _parse_index_from_url(u: str) -> int | None:
+        try:
+            m = re.search(r"/chapter[-_](\d+)", u, re.IGNORECASE)
+            if not m:
+                return None
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    last_index = start_chapter - 1
     while next_url:
         raise_if_cancelled()
         if is_stopped():
+            print("⏹️ Stop requested; returning partial chapters collected so far.")
             break
         current_url = next_url
+        # Decide which chapter index we're attempting
+        parsed_idx = _parse_index_from_url(current_url)
+        if parsed_idx is None:
+            current_index = last_index + 1
+        else:
+            current_index = parsed_idx if parsed_idx > last_index else last_index + 1
         next_url_short, chapter_title, chapter_data = get_chapter_data(current_url)
         if not chapter_data or not chapter_data.strip():
-            print("⚠️ Empty chapter encountered in sequential crawl; skipping.")
+            print("⚠️ Empty/failed chapter encountered in sequential crawl; skipping and attempting to continue.")
             empty_streak += 1
+            # Always push to failed bucket, no matter the reason
+            failed_bucket.append((current_index, current_url))
             if empty_streak >= 3:
                 print("⚠️ Too many consecutive empty chapters; stopping crawl.")
                 break
         else:
             empty_streak = 0
-            valid_seen += 1
-            if valid_seen < start_at:
-                next_url = urljoin(origin_url, next_url_short) if next_url_short else None
-                continue
-            chapter_title_list.append(chapter_title or f"Chapter {valid_seen}")
-            chapter_text_list.append(chapter_data)
-            collected += 1
-            if limit and limit > 0 and collected >= limit:
+            if current_index >= start_chapter:
+                results_map[current_index] = (chapter_title or f"Chapter {current_index}", chapter_data)
+                # After each success, opportunistically retry one failed bucket item
+                if failed_bucket:
+                    raise_if_cancelled()
+                    if not is_stopped():
+                        retry_idx, retry_url = failed_bucket.pop(0)
+                        try:
+                            pool = sample_proxy_pool(1)
+                        except Exception:
+                            pool = []
+                        retry_proxy = pool[0] if pool else None
+                        try:
+                            _, r_title, r_text = get_chapter_data(retry_url, preferred_proxy=retry_proxy)
+                            if r_text and r_text.strip():
+                                results_map[retry_idx] = (r_title or f"Chapter {retry_idx}", r_text)
+                                print(f"✅ Immediate retry succeeded for chapter {retry_idx}")
+                            else:
+                                failed_bucket.append((retry_idx, retry_url))
+                        except Exception as e:
+                            print(f"⚠️ Immediate retry failed for chapter {retry_idx}: {e}")
+                            failed_bucket.append((retry_idx, retry_url))
+        last_index = max(last_index, current_index)
+        # Prefer parsed next link; else attempt to guess from current URL
+        if next_url_short:
+            next_url = urljoin(origin_url, next_url_short)
+        else:
+            guessed = _guess_next_url(current_url)
+            if guessed:
+                print(f"➡️ Continuing to guessed next chapter: {guessed}")
+                next_url = guessed
+            else:
+                next_url = None
+
+    # Final retry pass for any failed chapters
+    if failed_bucket and not is_stopped():
+        print(f"🔁 Final retry for {len(failed_bucket)} missed chapters (up to 5 attempts)")
+        MAX_ATTEMPTS = 5
+        bucket = list(failed_bucket)
+        for attempt in range(MAX_ATTEMPTS):
+            if not bucket:
                 break
-        next_url = urljoin(origin_url, next_url_short) if next_url_short else None
-    return {"title": chapter_title_list, "text": chapter_text_list}
+            still_failed: List[Tuple[int, str]] = []
+            for idx, url in bucket:
+                raise_if_cancelled()
+                if is_stopped():
+                    break
+                retry_proxy = sample_proxy_pool(1)[0] if sample_proxy_pool(1) else None
+                try:
+                    _, r_title, r_text = get_chapter_data(url, preferred_proxy=retry_proxy)
+                    if r_text and r_text.strip():
+                        results_map[idx] = (r_title or f"Chapter {idx}", r_text)
+                        print(f"✅ Final retry succeeded for chapter {idx}")
+                    else:
+                        still_failed.append((idx, url))
+                except Exception as e:
+                    print(f"⚠️ Final retry failed for chapter {idx}: {e}")
+                    still_failed.append((idx, url))
+            bucket = still_failed
+        if bucket:
+            print(f"❌ Chapters still failed after all retries: {[i for i, _ in bucket]}")
+
+    if not results_map:
+        return {"title": [], "text": [], "index": []}
+    ordered = sorted(results_map.keys())
+    titles = [results_map[i][0] for i in ordered]
+    texts = [results_map[i][1] for i in ordered]
+    return {"title": titles, "text": texts, "index": ordered}
 
 
-def get_chapters(
-    read_first_url_or_index: str,
-    *,
-    chapter_workers: int = 0,
-    chapter_limit: int | None = None,
-    start_chapter: int = 1,
-):
+def get_chapters(read_first_url_or_index: str, *, chapter_workers: int = 0, chapter_limit: int | None = None, start_chapter: int = 1):
     """Top-level chapter fetcher.
 
     If chapter_workers > 0, treat the given URL as the novel index page and fetch
     chapter links concurrently; otherwise, follow next links sequentially from the
     provided chapter-1 URL.
     """
-    limit = chapter_limit if chapter_limit and chapter_limit > 0 else None
-    start = max(1, start_chapter or 1)
+    raise_if_cancelled()
+    # Auto-upgrade to index-based fetch if user wants to skip early chapters but provided no workers.
+    if start_chapter > 1 and (not chapter_workers or chapter_workers <= 0):
+        print(f"ℹ️ start_chapter={start_chapter} requested; switching to index scan mode (chapter_workers=1 implicit)")
+        chapter_workers = 1
+
     if chapter_workers and chapter_workers > 0:
-        return get_chapters_concurrent_from_index(
-            read_first_url_or_index,
-            max_workers=chapter_workers,
-            limit=limit,
-            start=start,
-        )
-    return get_chapters_sequential(
-        read_first_url_or_index,
-        start_at=start,
-        limit=limit,
-    )
+        data = get_chapters_concurrent_from_index(read_first_url_or_index, max_workers=chapter_workers, limit=chapter_limit, start_chapter=start_chapter)
+    else:
+        data = get_chapters_sequential(read_first_url_or_index, start_chapter=start_chapter)
+    # Validation: if no chapters after filtering
+    titles = data.get('title', [])
+    texts = data.get('text', [])
+    if not any(titles) or not any(x and x.strip() for x in texts):
+        raise RuntimeError(f"No chapters found at or after start_chapter={start_chapter}")
+    return data
 
     
-
-def scrape_novel(
-    url: str,
-    tmpdir: str,
-    *,
-    chapter_workers: int | None = None,
-    chapter_limit: int | None = None,
-    start_chapter: int = 1,
-):
-    """Fetch novel metadata and chapters, mirroring the legacy API surface.
-
-    The return signature matches the deprecated ``scraper.scrape_novel`` helper
-    that the service layer still depends on. The cover image is copied into the
-    provided temporary directory to ensure downstream EPUB builders can access
-    it even if the original path is in a shared media folder.
-    """
-
-    metadata = get_chapter_metadata(url)
-
-    workers = chapter_workers or 0
-    entrypoint = metadata.get("starting_url") or url
-    chapter_source = url if workers > 0 else entrypoint
-
-    chapters = get_chapters(
-        chapter_source,
-        chapter_workers=workers,
-        chapter_limit=chapter_limit,
-        start_chapter=start_chapter,
-    )
-
-    image_path = metadata.get("image_path")
-    if image_path and os.path.exists(image_path):
-        try:
-            copied_path = os.path.join(tmpdir, os.path.basename(image_path))
-            shutil.copy(image_path, copied_path)
-            metadata["image_path"] = copied_path
-        except Exception:
-            # If the copy fails the original path is still a valid fallback.
-            pass
-
-    return chapters, metadata
-
-

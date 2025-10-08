@@ -5,13 +5,6 @@ PyYAML
 PySocks
 fastapi
 uvicorn[standard]
-websockets
 python-multipart
-sqlalchemy
 boto3
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
-psycopg2-binary
-pydantic-settings
+python-dotenv

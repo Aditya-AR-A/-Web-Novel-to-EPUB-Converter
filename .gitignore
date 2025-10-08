@@ -2,12 +2,7 @@
 /media
 /books
 *.epub
-*.png
-.venv
-__pycache__
-*.pyc
-/hf_cloe
-noveltoepub-1bc34ee7140e.json
+# *.png
 
 ### Python Virtual Environments ###
 .venv/
