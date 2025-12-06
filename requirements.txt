@@ -12,3 +12,4 @@ pymongo[srv]
 cloudscraper
 mega.py
 pillow
+tenacity>=8.2.0
