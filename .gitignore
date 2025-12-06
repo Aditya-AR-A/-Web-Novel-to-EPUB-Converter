@@ -1,7 +1,7 @@
 ### Project Generated Content ###
 /media
 /books
-*.epub
+/manga
 # *.png
 
 ### Python Virtual Environments ###

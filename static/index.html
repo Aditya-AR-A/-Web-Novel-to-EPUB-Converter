@@ -162,40 +162,32 @@
                                     <label for="mangaLimit">Chapter limit</label>
                                     <input type="number" id="mangaLimit" min="0" placeholder="All" />
                                 </div>
-                                <div class="field narrow">
-                                    <label for="mangaSplit">Split CBZ every</label>
-                                    <select id="mangaSplit">
-                                        <option value="0">No split</option>
-                                        <option value="10">10 chapters</option>
-                                        <option value="20">20 chapters</option>
-                                        <option value="30">30 chapters</option>
-                                        <option value="50">50 chapters</option>
-                                    </select>
-                                </div>
                             </div>
-                            <div class="flex buttons">
+                            <div class="manga-options">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="mangaAutoDownload" />
+                                    <span>📦 Download after creation</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="mangaAutoUpload" />
+                                    <span>☁️ Auto-upload to MEGA</span>
+                                </label>
+                            </div>
+                            <div class="flex buttons manga-buttons">
                                 <button id="mangaGenBtn" class="primary" type="submit">Generate Manga</button>
+                                <button id="mangaCancelBtn" class="danger" type="button" style="display:none;">✕ Cancel</button>
+                                <button id="mangaStopBtn" class="secondary" type="button" style="display:none;">⏸ Stop</button>
                             </div>
-                            <p class="helper-text">Supports MangaDex, Webtoons, Manga18 and more. Download as CBZ or PDF.</p>
-                            <noscript>
-                                <p class="no-js-notice" style="color: #f59e0b; padding: 0.5rem; background: #f59e0b20; border-radius: 6px; margin-top: 0.5rem;">
-                                    ⚠️ JavaScript is disabled. Some features require JavaScript. 
-                                    You can still browse cached manga below and download files directly.
-                                </p>
-                            </noscript>
+                            <p class="helper-text">Supports MangaDex, Webtoons, Manga18 and more. Click any manga card to view details and download.</p>
                         </form>
                     </div>
 
                     <div class="card controls-card">
                         <div class="actions control-toolbar">
                             <div class="field search">
-                                <input type="text" id="mangaSearchInput" placeholder="Filter manga by title or author" />
+                                <input type="text" id="mangaSearchInput" placeholder="Search manga by title..." />
                             </div>
                             <div class="actions-right">
-                                <button id="mangaViewToggle" class="secondary js-only" type="button" title="Toggle grid/list view"
-                                    aria-label="Toggle view">
-                                    <img src="/static/images/list.svg" alt="" class="icon" aria-hidden="true" />
-                                </button>
                                 <button id="mangaRefreshBtn" class="secondary js-only" type="button" title="Refresh list"
                                     aria-label="Refresh list">
                                     <img src="/static/images/refresh.svg" alt="" class="icon" aria-hidden="true" />
@@ -206,10 +198,6 @@
 
                     <div class="card manga-grid-card">
                         <div id="mangaGrid" class="manga-grid"></div>
-                    </div>
-
-                    <div class="card manga-list-card hidden">
-                        <div id="mangaList" class="manga-list"></div>
                     </div>
                 </div>
             </div>

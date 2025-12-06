@@ -16,24 +16,30 @@ function truncate(text, maxLength = 150) {
     return str.length > maxLength ? `${str.slice(0, maxLength - 1)}…` : str;
 }
 
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '—';
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
+}
+
 export function initMangaSection({ log }) {
-    const mangaList = $('#mangaList');
     const mangaGrid = $('#mangaGrid');
     const mangaForm = $('#mangaForm');
     const mangaUrl = $('#mangaUrl');
     const mangaLang = $('#mangaLang');
     const mangaLimit = $('#mangaLimit');
-    const mangaSplit = $('#mangaSplit');
     const mangaGenBtn = $('#mangaGenBtn');
+    const mangaCancelBtn = $('#mangaCancelBtn');
+    const mangaStopBtn = $('#mangaStopBtn');
     const mangaRefreshBtn = $('#mangaRefreshBtn');
     const mangaSearchInput = $('#mangaSearchInput');
-    const mangaViewToggle = $('#mangaViewToggle');
-    const mangaGridCard = $('.manga-grid-card');
-    const mangaListCard = $('.manga-list-card');
+    const mangaAutoUpload = $('#mangaAutoUpload');
+    const mangaAutoDownload = $('#mangaAutoDownload');
 
     let currentSearch = '';
     let isGenerating = false;
-    let viewMode = 'grid'; // 'grid' or 'list'
+    let mangaData = []; // Store manga data for popup
 
     // Tab switching
     const tabBtns = $$('.tab-btn');
@@ -47,17 +53,274 @@ export function initMangaSection({ log }) {
         });
     });
 
-    // View toggle
-    if (mangaViewToggle) {
-        mangaViewToggle.addEventListener('click', () => {
-            viewMode = viewMode === 'grid' ? 'list' : 'grid';
-            if (mangaGridCard) mangaGridCard.classList.toggle('hidden', viewMode !== 'grid');
-            if (mangaListCard) mangaListCard.classList.toggle('hidden', viewMode !== 'list');
+    // Create modal container
+    const modalContainer = document.createElement('div');
+    modalContainer.id = 'mangaModal';
+    modalContainer.className = 'manga-modal';
+    modalContainer.innerHTML = `
+        <div class="manga-modal-backdrop"></div>
+        <div class="manga-modal-content">
+            <button class="manga-modal-close" aria-label="Close">&times;</button>
+            <div class="manga-modal-body"></div>
+        </div>
+    `;
+    document.body.appendChild(modalContainer);
+
+    const modal = $('#mangaModal');
+    const modalBackdrop = modal?.querySelector('.manga-modal-backdrop');
+    const modalContent = modal?.querySelector('.manga-modal-content');
+    const modalBody = modal?.querySelector('.manga-modal-body');
+    const modalClose = modal?.querySelector('.manga-modal-close');
+
+    function openModal(mangaKey) {
+        const manga = mangaData.find(m => m.manga_key === mangaKey);
+        if (!manga || !modal) return;
+
+        modalBody.innerHTML = renderMangaModalContent(manga);
+        modal.classList.add('open');
+        document.body.style.overflow = 'hidden';
+        
+        // Attach modal event listeners
+        attachModalEventListeners(mangaKey, manga);
+    }
+
+    function closeModal() {
+        if (!modal) return;
+        modal.classList.remove('open');
+        document.body.style.overflow = '';
+    }
+
+    // Close modal events
+    modalBackdrop?.addEventListener('click', closeModal);
+    modalClose?.addEventListener('click', closeModal);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeModal();
+    });
+
+    function renderMangaModalContent(manga) {
+        const m = manga;
+        return `
+            <div class="modal-manga-header">
+                <div class="modal-cover">
+                    ${m.cover_image 
+                        ? `<img src="${escapeHtml(m.cover_image)}" alt="${escapeHtml(m.title)}" />`
+                        : `<div class="no-cover-large">📚</div>`
+                    }
+                </div>
+                <div class="modal-info">
+                    <h2 class="modal-title">${escapeHtml(m.title)}</h2>
+                    <div class="modal-meta">
+                        ${m.author ? `<span class="meta-item"><strong>Author:</strong> ${escapeHtml(m.author)}</span>` : ''}
+                        ${m.artist ? `<span class="meta-item"><strong>Artist:</strong> ${escapeHtml(m.artist)}</span>` : ''}
+                        ${m.status ? `<span class="meta-item"><span class="status-badge">${escapeHtml(m.status)}</span></span>` : ''}
+                    </div>
+                    <div class="modal-stats">
+                        <span class="stat-item">📖 ${m.chapter_count || 0} chapters</span>
+                        <span class="stat-item">🖼️ ${m.total_pages || 0} pages</span>
+                        ${m.cbz_size_formatted ? `<span class="stat-item">💾 ${m.cbz_size_formatted}</span>` : ''}
+                    </div>
+                    ${m.genre && m.genre.length ? `
+                        <div class="modal-genres">
+                            ${(Array.isArray(m.genre) ? m.genre : [m.genre]).map(g => `<span class="genre-tag">${escapeHtml(g)}</span>`).join('')}
+                        </div>
+                    ` : ''}
+                    ${m.source_url ? `<a href="${escapeHtml(m.source_url)}" target="_blank" rel="noopener" class="source-link">🔗 View Source</a>` : ''}
+                </div>
+            </div>
+            
+            ${m.description ? `
+                <div class="modal-section">
+                    <h3>Description</h3>
+                    <p class="modal-description">${escapeHtml(m.description)}</p>
+                </div>
+            ` : ''}
+
+            <div class="modal-section">
+                <h3>📥 Downloads</h3>
+                <div class="download-section">
+                    <div class="download-range-controls">
+                        <div class="range-inputs">
+                            <label>
+                                <span>From Chapter</span>
+                                <input type="number" id="modal-range-from" value="1" min="1" />
+                            </label>
+                            <label>
+                                <span>To Chapter</span>
+                                <input type="number" id="modal-range-to" value="${m.chapter_count || 1}" min="1" />
+                            </label>
+                        </div>
+                        <div class="download-buttons">
+                            <button class="btn primary modal-download-range" data-key="${escapeHtml(m.manga_key)}">
+                                📦 Download CBZ (Range)
+                            </button>
+                            <button class="btn secondary modal-download-all" data-key="${escapeHtml(m.manga_key)}">
+                                📦 Download All
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-section">
+                <h3>☁️ Cloud Storage</h3>
+                <div class="cloud-section">
+                    ${m.mega_cbz_enabled 
+                        ? `<button class="btn primary modal-open-mega" data-key="${escapeHtml(m.manga_key)}">☁️ Open MEGA Folder</button>`
+                        : `<button class="btn secondary modal-upload-mega" data-key="${escapeHtml(m.manga_key)}">☁️ Upload to MEGA</button>`
+                    }
+                    <p class="cloud-hint">${m.mega_cbz_enabled ? 'Your manga is uploaded to MEGA cloud storage.' : 'Upload chapter CBZ files to your MEGA account for permanent storage.'}</p>
+                </div>
+            </div>
+
+            <div class="modal-section">
+                <h3>📖 Chapters</h3>
+                <div class="chapters-list" id="modal-chapters-${escapeHtml(m.manga_key)}">
+                    <div class="loading-chapters">Loading chapters...</div>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn danger modal-delete" data-key="${escapeHtml(m.manga_key)}">🗑️ Delete Manga</button>
+            </div>
+        `;
+    }
+
+    async function attachModalEventListeners(mangaKey, manga) {
+        // Download range
+        const rangeBtn = modalBody?.querySelector('.modal-download-range');
+        rangeBtn?.addEventListener('click', () => {
+            const from = document.getElementById('modal-range-from')?.value || '1';
+            const to = document.getElementById('modal-range-to')?.value || '';
+            const url = `/manga/${mangaKey}/download/range?from_chapter=${from}&to_chapter=${to}`;
+            log?.(`📦 Downloading chapters ${from} to ${to}...`);
+            window.location.href = url;
         });
+
+        // Download all
+        const allBtn = modalBody?.querySelector('.modal-download-all');
+        allBtn?.addEventListener('click', () => {
+            const url = `/manga/${mangaKey}/download/range`;
+            log?.(`📦 Downloading all chapters...`);
+            window.location.href = url;
+        });
+
+        // MEGA upload
+        const megaUploadBtn = modalBody?.querySelector('.modal-upload-mega');
+        megaUploadBtn?.addEventListener('click', async () => {
+            if (!confirm(`Upload "${manga.title}" to MEGA?\n\nThis will create CBZ files for each chapter and upload them.`)) return;
+            
+            megaUploadBtn.disabled = true;
+            megaUploadBtn.innerHTML = '☁️ Uploading...';
+            log?.(`☁️ Starting MEGA upload for: ${mangaKey}`);
+            
+            try {
+                const res = await fetchJSON(`/manga/${mangaKey}/upload-cbz-to-mega`, { method: 'POST' });
+                if (res.ok) {
+                    log?.(`☁️ ✅ Uploaded ${res.data.uploaded} chapters to MEGA`);
+                    megaUploadBtn.innerHTML = '☁️ Open MEGA Folder';
+                    megaUploadBtn.classList.remove('secondary');
+                    megaUploadBtn.classList.add('primary');
+                    megaUploadBtn.classList.remove('modal-upload-mega');
+                    megaUploadBtn.classList.add('modal-open-mega');
+                    loadMangaList();
+                } else {
+                    log?.(`☁️ ❌ Upload failed: ${res.error}`);
+                    megaUploadBtn.innerHTML = '☁️ Upload to MEGA';
+                }
+            } catch (err) {
+                log?.(`☁️ ❌ Error: ${err.message}`);
+                megaUploadBtn.innerHTML = '☁️ Upload to MEGA';
+            } finally {
+                megaUploadBtn.disabled = false;
+            }
+        });
+
+        // MEGA open folder
+        const megaOpenBtn = modalBody?.querySelector('.modal-open-mega');
+        megaOpenBtn?.addEventListener('click', async () => {
+            try {
+                const res = await fetchJSON(`/manga/${mangaKey}/mega-folder`);
+                if (res.ok && res.data.folder_url) {
+                    window.open(res.data.folder_url, '_blank');
+                }
+            } catch (err) {
+                log?.(`☁️ Error: ${err.message}`);
+            }
+        });
+
+        // Delete
+        const deleteBtn = modalBody?.querySelector('.modal-delete');
+        deleteBtn?.addEventListener('click', async () => {
+            if (!confirm(`Delete "${manga.title}"?\n\nThis cannot be undone.`)) return;
+            
+            try {
+                const res = await fetchJSON(`/manga/${mangaKey}`, { method: 'DELETE' });
+                if (res.ok) {
+                    log?.(`🗑️ Deleted: ${manga.title}`);
+                    closeModal();
+                    loadMangaList();
+                } else {
+                    log?.(`❌ Delete failed: ${res.error}`);
+                }
+            } catch (err) {
+                log?.(`❌ Error: ${err.message}`);
+            }
+        });
+
+        // Load chapters
+        await loadChaptersInModal(mangaKey);
+    }
+
+    async function loadChaptersInModal(mangaKey) {
+        const chaptersList = document.getElementById(`modal-chapters-${mangaKey}`);
+        if (!chaptersList) return;
+
+        try {
+            const res = await fetchJSON(`/manga/${mangaKey}/chapters-info`);
+            if (res.ok && res.data.chapters) {
+                const chapters = res.data.chapters;
+                
+                // Update the range input max values
+                const toInput = document.getElementById('modal-range-to');
+                if (toInput && chapters.length > 0) {
+                    toInput.value = res.data.last_chapter || chapters.length;
+                    toInput.max = res.data.last_chapter || chapters.length;
+                }
+                
+                if (chapters.length === 0) {
+                    chaptersList.innerHTML = '<p class="no-chapters">No chapters found.</p>';
+                    return;
+                }
+
+                chaptersList.innerHTML = `
+                    <div class="chapters-grid">
+                        ${chapters.map(ch => `
+                            <div class="chapter-row">
+                                <div class="chapter-info">
+                                    <span class="chapter-num">Ch. ${escapeHtml(ch.chapter)}</span>
+                                    ${ch.title ? `<span class="chapter-title">${escapeHtml(truncate(ch.title, 40))}</span>` : ''}
+                                </div>
+                                <div class="chapter-meta">
+                                    <span class="page-count">${ch.pages} pages</span>
+                                    ${ch.mega_url 
+                                        ? `<a href="${escapeHtml(ch.mega_url)}" target="_blank" class="btn-mini cloud">☁️</a>`
+                                        : `<a href="/manga/${escapeHtml(mangaKey)}/download/chapter/${escapeHtml(ch.chapter)}" class="btn-mini">📦</a>`
+                                    }
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else {
+                chaptersList.innerHTML = '<p class="error">Failed to load chapters</p>';
+            }
+        } catch (err) {
+            chaptersList.innerHTML = '<p class="error">Error loading chapters</p>';
+        }
     }
 
     async function loadMangaList() {
-        if (!mangaList && !mangaGrid) return;
+        if (!mangaGrid) return;
 
         try {
             const params = new URLSearchParams({ offset: 0, limit: 100 });
@@ -69,253 +332,90 @@ export function initMangaSection({ log }) {
                 return;
             }
 
-            const items = res.data.items || [];
-            renderMangaList(items);
+            mangaData = res.data.items || [];
+            renderMangaGrid(mangaData);
         } catch (err) {
             log?.(`Error loading manga: ${err.message}`);
         }
     }
 
-    function renderMangaList(items) {
-        if (!mangaList && !mangaGrid) return;
+    function renderMangaGrid(items) {
+        if (!mangaGrid) return;
 
         if (items.length === 0) {
-            const emptyHtml = `
+            mangaGrid.innerHTML = `
                 <div class="empty-state">
-                    <p>No manga found. Add one using the form above!</p>
+                    <div class="empty-icon">📚</div>
+                    <p>No manga found</p>
+                    <span>Add a manga using the form above!</span>
                 </div>
             `;
-            if (mangaList) mangaList.innerHTML = emptyHtml;
-            if (mangaGrid) mangaGrid.innerHTML = emptyHtml;
             return;
         }
 
-        // Grid view with description, file sizes, and collapsible downloads
-        const gridHtml = items.map(m => `
+        mangaGrid.innerHTML = items.map(m => `
             <div class="manga-card" data-key="${escapeHtml(m.manga_key)}">
                 <div class="manga-cover">
                     ${m.cover_image 
                         ? `<img src="${escapeHtml(m.cover_image)}" alt="${escapeHtml(m.title)}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="no-cover" style="display:none">📚</div>`
                         : `<div class="no-cover">📚</div>`
                     }
+                    <div class="card-overlay">
+                        <span class="view-details">View Details</span>
+                    </div>
                 </div>
                 <div class="manga-info">
-                    <h3 class="manga-title" title="${escapeHtml(m.title)}">${escapeHtml(truncate(m.title, 40))}</h3>
+                    <h3 class="manga-title" title="${escapeHtml(m.title)}">${escapeHtml(truncate(m.title, 35))}</h3>
                     <p class="manga-meta">
-                        ${m.author ? `<span class="author">👤 ${escapeHtml(m.author)}</span>` : ''}
-                        ${m.status ? `<span class="status">${escapeHtml(m.status)}</span>` : ''}
+                        ${m.author ? `<span class="author">${escapeHtml(m.author)}</span>` : ''}
                     </p>
-                    ${m.description ? `<p class="manga-desc" title="${escapeHtml(m.description)}">${escapeHtml(truncate(m.description, 80))}</p>` : ''}
-                    <p class="manga-stats">
-                        📖 ${m.chapter_count || 0} chapters · 🖼️ ${m.total_pages || 0} pages
-                        ${m.cbz_size_formatted ? `<br>💾 CBZ: ${escapeHtml(m.cbz_size_formatted)}` : ''}
-                    </p>
-                    <details class="manga-downloads">
-                        <summary class="downloads-toggle">📥 Downloads</summary>
-                        <div class="manga-actions">
-                            <button class="btn-small primary download-cbz" data-key="${escapeHtml(m.manga_key)}" title="Download complete CBZ">
-                                📦 ${m.cbz_size_formatted ? `CBZ (${m.cbz_size_formatted})` : 'CBZ'}
-                            </button>
-                            <button class="btn-small secondary download-pdf" data-key="${escapeHtml(m.manga_key)}" title="Download as PDF (slow)">
-                                📄 PDF
-                            </button>
-                            <button class="btn-small secondary show-files" data-key="${escapeHtml(m.manga_key)}" title="Show all download options">
-                                📁 More
-                            </button>
-                            <button class="btn-small danger delete-manga" data-key="${escapeHtml(m.manga_key)}" title="Delete manga">
-                                🗑️
-                            </button>
-                        </div>
-                        <div class="file-list" id="files-${escapeHtml(m.manga_key)}" style="display:none"></div>
-                    </details>
+                    <div class="manga-stats">
+                        <span>📖 ${m.chapter_count || 0}</span>
+                        <span>🖼️ ${m.total_pages || 0}</span>
+                        ${m.mega_cbz_enabled ? '<span class="cloud-badge">☁️</span>' : ''}
+                    </div>
                 </div>
             </div>
         `).join('');
 
-        // List view
-        const listHtml = `
-            <table class="manga-table">
-                <thead>
-                    <tr>
-                        <th>Cover</th>
-                        <th>Title</th>
-                        <th>Author</th>
-                        <th>Chapters</th>
-                        <th>Size</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${items.map(m => `
-                        <tr data-key="${escapeHtml(m.manga_key)}">
-                            <td class="cover-cell">
-                                ${m.cover_image 
-                                    ? `<img src="${escapeHtml(m.cover_image)}" alt="" class="cover-thumb" loading="lazy" onerror="this.style.display='none'" />`
-                                    : `<span class="no-cover-small">📚</span>`
-                                }
-                            </td>
-                            <td class="title-cell">
-                                <a href="${escapeHtml(m.source_url || '#')}" target="_blank" rel="noopener" title="${escapeHtml(m.title)}">
-                                    ${escapeHtml(truncate(m.title, 50))}
-                                </a>
-                                ${m.description ? `<small class="desc-preview">${escapeHtml(truncate(m.description, 50))}</small>` : ''}
-                            </td>
-                            <td>${escapeHtml(m.author || '—')}</td>
-                            <td>${m.chapter_count || 0}</td>
-                            <td>${m.cbz_size_formatted || '—'}</td>
-                            <td><span class="status-badge ${escapeHtml(m.status || '')}">${escapeHtml(m.status || '—')}</span></td>
-                            <td class="actions-cell">
-                                <button class="btn-icon download-cbz" data-key="${escapeHtml(m.manga_key)}" title="Download CBZ">📦</button>
-                                <button class="btn-icon download-pdf" data-key="${escapeHtml(m.manga_key)}" title="Download PDF">📄</button>
-                                <button class="btn-icon danger delete-manga" data-key="${escapeHtml(m.manga_key)}" title="Delete">🗑️</button>
-                            </td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
-
-        if (mangaGrid) mangaGrid.innerHTML = gridHtml;
-        if (mangaList) mangaList.innerHTML = listHtml;
-
-        // Attach event listeners
-        attachMangaEventListeners();
+        // Attach click events to cards
+        $$('.manga-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const key = card.dataset.key;
+                openModal(key);
+            });
+        });
     }
 
-    function attachMangaEventListeners() {
-        // Download CBZ
-        $$('.download-cbz').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const key = btn.dataset.key;
-                log?.(`Starting CBZ download for: ${key}`);
-                const origText = btn.textContent;
-                btn.disabled = true;
-                btn.textContent = '⏳...';
-                // Open in new tab - the server will generate if not cached
-                window.open(`/manga/${key}/download/cbz`, '_blank');
-                setTimeout(() => {
-                    btn.disabled = false;
-                    btn.textContent = origText;
-                }, 2000);
-            });
-        });
-
-        // Download PDF
-        $$('.download-pdf').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const key = btn.dataset.key;
-                if (!confirm('PDF generation can take several minutes for large manga. Continue?')) return;
-                log?.(`Starting PDF download for: ${key}`);
-                window.open(`/manga/${key}/download/pdf`, '_blank');
-            });
-        });
-
-        // Show more files
-        $$('.show-files').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const key = btn.dataset.key;
-                const fileListEl = document.getElementById(`files-${key}`);
-                
-                if (fileListEl.style.display === 'none') {
-                    fileListEl.style.display = 'block';
-                    fileListEl.innerHTML = '<span class="loading">Loading files...</span>';
-                    
-                    try {
-                        const res = await fetchJSON(`/manga/${key}/files`);
-                        if (res.ok && res.data.files) {
-                            const files = res.data.files;
-                            let html = '';
-                            
-                            if (files.length === 0) {
-                                html = '<span class="no-files">No cached files yet.</span>';
-                            } else {
-                                html = files.map(f => `
-                                    <a href="${f.url}" class="file-item" download>
-                                        📁 ${escapeHtml(f.label)} <small>(${escapeHtml(f.size_formatted)})</small>
-                                    </a>
-                                `).join('');
-                            }
-                            
-                            // Add split generation button
-                            html += `
-                                <div class="split-actions" style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border);">
-                                    <label style="font-size: 0.65rem; margin-right: 0.5rem;">Split every:</label>
-                                    <select class="split-select" data-key="${escapeHtml(key)}" style="font-size: 0.65rem; padding: 0.25rem;">
-                                        <option value="10">10 chapters</option>
-                                        <option value="20">20 chapters</option>
-                                        <option value="30">30 chapters</option>
-                                        <option value="50">50 chapters</option>
-                                    </select>
-                                    <button class="btn-small generate-splits" data-key="${escapeHtml(key)}" style="margin-left: 0.35rem;">
-                                        ✂️ Generate Splits
-                                    </button>
-                                </div>
-                            `;
-                            
-                            fileListEl.innerHTML = html;
-                            
-                            // Attach split generation event
-                            const splitBtn = fileListEl.querySelector('.generate-splits');
-                            const splitSelect = fileListEl.querySelector('.split-select');
-                            
-                            if (splitBtn && splitSelect) {
-                                splitBtn.addEventListener('click', async () => {
-                                    const chaptersPerFile = parseInt(splitSelect.value, 10);
-                                    splitBtn.disabled = true;
-                                    splitBtn.textContent = '⏳ Generating...';
-                                    
-                                    try {
-                                        const splitRes = await fetchJSON(`/manga/${key}/split?chapters_per_file=${chaptersPerFile}`, {
-                                            method: 'POST'
-                                        });
-                                        
-                                        if (splitRes.ok) {
-                                            log?.(`✅ Generated ${splitRes.data.total_files} split CBZ files`);
-                                            // Refresh the file list
-                                            btn.click(); // close
-                                            setTimeout(() => btn.click(), 100); // reopen
-                                        } else {
-                                            log?.(`❌ Split generation failed: ${splitRes.error}`);
-                                        }
-                                    } catch (err) {
-                                        log?.(`❌ Error: ${err.message}`);
-                                    } finally {
-                                        splitBtn.disabled = false;
-                                        splitBtn.textContent = '✂️ Generate Splits';
-                                    }
-                                });
-                            }
-                        } else {
-                            fileListEl.innerHTML = '<span class="error">Failed to load files</span>';
-                        }
-                    } catch (err) {
-                        fileListEl.innerHTML = '<span class="error">Error loading files</span>';
-                    }
+    // Cancel generation
+    if (mangaCancelBtn) {
+        mangaCancelBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetchJSON('/manga/cancel', { method: 'POST' });
+                if (res.ok) {
+                    log?.('⚠️ Manga generation cancelled');
                 } else {
-                    fileListEl.style.display = 'none';
+                    log?.(`Cancel failed: ${res.error}`);
                 }
-            });
+            } catch (err) {
+                log?.(`Cancel error: ${err.message}`);
+            }
         });
+    }
 
-        // Delete manga
-        $$('.delete-manga').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const key = btn.dataset.key;
-                if (!confirm(`Delete manga "${key}"? This cannot be undone.`)) return;
-
-                try {
-                    const res = await fetchJSON(`/manga/${key}`, { method: 'DELETE' });
-                    if (res.ok) {
-                        log?.(`Deleted manga: ${key}`);
-                        loadMangaList();
-                    } else {
-                        log?.(`Failed to delete: ${res.error || 'Unknown error'}`);
-                    }
-                } catch (err) {
-                    log?.(`Error deleting manga: ${err.message}`);
+    // Stop generation (graceful)
+    if (mangaStopBtn) {
+        mangaStopBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetchJSON('/manga/stop', { method: 'POST' });
+                if (res.ok) {
+                    log?.('⏸️ Manga generation will stop after current chapter');
+                } else {
+                    log?.(`Stop failed: ${res.error}`);
                 }
-            });
+            } catch (err) {
+                log?.(`Stop error: ${err.message}`);
+            }
         });
     }
 
@@ -332,19 +432,18 @@ export function initMangaSection({ log }) {
             }
 
             isGenerating = true;
-            if (mangaGenBtn) {
-                mangaGenBtn.disabled = true;
-                mangaGenBtn.textContent = 'Generating...';
-            }
+            updateGeneratingUI(true);
 
             try {
-                log?.(`Starting manga generation for: ${url}`);
+                log?.(`🚀 Starting manga generation for: ${url}`);
                 const body = {
                     url,
                     translated_language: mangaLang?.value || null,
                     chapter_limit: mangaLimit?.value ? parseInt(mangaLimit.value, 10) : null,
                     use_data_saver: true,
-                    page_workers: 4
+                    page_workers: 4,
+                    auto_upload_mega: mangaAutoUpload?.checked || false,
+                    auto_download: mangaAutoDownload?.checked || false
                 };
 
                 const res = await fetchJSON('/manga/generate', {
@@ -357,27 +456,45 @@ export function initMangaSection({ log }) {
                     const data = res.data;
                     log?.(`✅ Manga generated: ${data.metadata?.title || 'Unknown'} (${data.chapters} chapters)`);
                     
-                    // Check if split CBZ generation was requested
-                    const splitValue = parseInt(mangaSplit?.value || '0', 10);
-                    if (splitValue > 0 && data.saved?.manga_key) {
-                        log?.(`📦 Split CBZ option selected (${splitValue} chapters each) - use "More" button to generate splits`);
+                    if (data.mega_upload && data.mega_upload.uploaded > 0) {
+                        log?.(`☁️ Auto-uploaded ${data.mega_upload.uploaded} chapters to MEGA`);
+                    }
+                    
+                    // Auto-download if checked
+                    if (mangaAutoDownload?.checked && data.saved?.manga_key) {
+                        log?.('📦 Starting auto-download...');
+                        window.location.href = `/manga/${data.saved.manga_key}/download/range`;
                     }
                     
                     loadMangaList();
                     if (mangaUrl) mangaUrl.value = '';
                 } else {
-                    log?.(`❌ Failed: ${res.error || 'Unknown error'}`);
+                    if (res.code === 'cancelled') {
+                        log?.('⚠️ Generation was cancelled');
+                    } else {
+                        log?.(`❌ Failed: ${res.error || 'Unknown error'}`);
+                    }
                 }
             } catch (err) {
                 log?.(`❌ Error: ${err.message}`);
             } finally {
                 isGenerating = false;
-                if (mangaGenBtn) {
-                    mangaGenBtn.disabled = false;
-                    mangaGenBtn.textContent = 'Generate Manga';
-                }
+                updateGeneratingUI(false);
             }
         });
+    }
+
+    function updateGeneratingUI(generating) {
+        if (mangaGenBtn) {
+            mangaGenBtn.disabled = generating;
+            mangaGenBtn.textContent = generating ? 'Generating...' : 'Generate Manga';
+        }
+        if (mangaCancelBtn) {
+            mangaCancelBtn.style.display = generating ? 'inline-flex' : 'none';
+        }
+        if (mangaStopBtn) {
+            mangaStopBtn.style.display = generating ? 'inline-flex' : 'none';
+        }
     }
 
     // Search

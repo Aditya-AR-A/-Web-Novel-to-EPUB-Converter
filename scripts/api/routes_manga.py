@@ -7,13 +7,14 @@ import os
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 import requests
 import cloudscraper
 
 from scripts.api.utils import success, error, BOOKS_DIR
 from scripts.config import MANGA_DIR, MANGA_MANIFEST_NAME
-from scripts.cancellation import start_job, end_job, CancelledError
+from scripts.cancellation import start_job, end_job, request_cancel, request_stop, CancelledError
 from scripts.manga.scraper import get_manga_metadata as _get_manga_metadata, get_manga_manifest as _get_manga_manifest, get_supported_sources
 from scripts.db.manga_operations import save_manga_manifest, get_manga_list, get_manga_by_key, delete_manga
 
@@ -26,10 +27,103 @@ def _log(msg: str):
     print(f"[manga-api] {msg}")
 
 
+def _auto_upload_to_mega(manga_key: str, chapters: list, manga_info: dict) -> dict:
+    """
+    Auto-upload chapter CBZs to MEGA after manga generation.
+    
+    Returns:
+        Dict with upload results or None if failed
+    """
+    import time
+    from scripts.storage.mega_storage import get_mega_storage
+    
+    try:
+        mega = get_mega_storage()
+        if not mega:
+            return None
+        
+        manga_dir = Path(str(MANGA_DIR)).resolve() / manga_key
+        cbz_dir = manga_dir / "cbz"
+        cbz_dir.mkdir(exist_ok=True)
+        
+        uploaded_files = []
+        failed_files = []
+        
+        for ch in chapters:
+            ch_num = ch.get("chapter", "0")
+            
+            # Create the CBZ
+            cbz_path = _create_chapter_cbz(manga_key, ch, manga_info, cbz_dir)
+            
+            if not cbz_path or not cbz_path.exists():
+                failed_files.append(ch_num)
+                continue
+            
+            # Upload to MEGA (with dedup check)
+            mega_url = mega.upload_cbz(str(cbz_path), manga_key, ch_num, skip_existing=True)
+            
+            if mega_url:
+                uploaded_files.append({
+                    "chapter": ch_num,
+                    "mega_url": mega_url
+                })
+                ch["cbz_mega_url"] = mega_url
+            else:
+                failed_files.append(ch_num)
+            
+            # Small delay to avoid rate limiting
+            time.sleep(1)
+        
+        # Get folder link
+        folder_url = mega.get_folder_link(f"manga/{manga_key}")
+        
+        # Update manifest
+        mf = manga_dir / MANGA_MANIFEST_NAME
+        if mf.exists():
+            try:
+                payload = json.loads(mf.read_text(encoding="utf-8"))
+                payload["mega_cbz"] = {
+                    "enabled": True,
+                    "folder_url": folder_url,
+                    "uploaded_at": __import__("datetime").datetime.utcnow().isoformat(),
+                    "chapter_count": len(uploaded_files)
+                }
+                mf.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            except Exception as e:
+                _log(f"⚠️ Failed to update manifest with MEGA info: {e}")
+        
+        return {
+            "uploaded": len(uploaded_files),
+            "failed": len(failed_files),
+            "folder_url": folder_url,
+            "files": uploaded_files
+        }
+        
+    except Exception as e:
+        _log(f"⚠️ Auto-upload to MEGA failed: {e}")
+        return None
+
+
 @router.get("/manga/sources")
 def list_sources():
     """Get list of supported manga sources."""
     return success(get_supported_sources())
+
+
+@router.post("/manga/cancel")
+def cancel_manga_generation():
+    """Cancel the current manga generation immediately."""
+    request_cancel()
+    _log("⚠️ Manga generation cancellation requested")
+    return success({"message": "Cancellation requested"})
+
+
+@router.post("/manga/stop")
+def stop_manga_generation():
+    """Gracefully stop manga generation after current chapter."""
+    request_stop()
+    _log("⏸️ Manga generation stop requested (will finish current chapter)")
+    return success({"message": "Stop requested"})
 
 
 class GenerateMangaRequest(BaseModel):
@@ -38,6 +132,7 @@ class GenerateMangaRequest(BaseModel):
     use_data_saver: bool = True
     chapter_limit: Optional[int] = None
     page_workers: Optional[int] = 4
+    auto_upload_mega: Optional[bool] = False
 
 
 @router.post("/manga/generate")
@@ -79,12 +174,32 @@ def generate_manga(req: GenerateMangaRequest):
         _log(f"⚠️ Failed to save manifest: {e}")
         saved = None
     
+    # Auto-upload to MEGA if requested
+    mega_result = None
+    if req.auto_upload_mega and saved:
+        try:
+            from scripts.storage.mega_storage import get_mega_storage, is_mega_configured
+            if is_mega_configured():
+                _log("☁️ Auto-uploading to MEGA...")
+                manga_key = saved.get("manga_key") or meta.get("manga_key")
+                if manga_key:
+                    # Trigger the MEGA upload
+                    mega_upload_result = _auto_upload_to_mega(manga_key, manifest.get("chapters") or [], meta)
+                    if mega_upload_result:
+                        mega_result = mega_upload_result
+                        _log(f"☁️ ✅ Auto-uploaded {mega_result.get('uploaded', 0)} chapters to MEGA")
+            else:
+                _log("☁️ MEGA not configured, skipping auto-upload")
+        except Exception as e:
+            _log(f"☁️ ⚠️ Auto-upload to MEGA failed: {e}")
+    
     end_job(job_id)
     _log("🎉 Manga generation complete!")
     return success({
         "metadata": meta,
         "chapters": len(manifest.get("chapters") or []),
         "saved": saved,
+        "mega_upload": mega_result,
     })
 
 
@@ -145,6 +260,9 @@ def list_manga(offset: int = 0, limit: int = 100, search: Optional[str] = None):
             cbz_size = cbz_path.stat().st_size
             cbz_size_formatted = _format_size(cbz_size)
         
+        # Check if uploaded to MEGA (CBZ mode)
+        mega_cbz_enabled = payload.get("mega_cbz", {}).get("enabled", False)
+        
         items.append({
             "manga_key": k,
             "title": info.get("title"),
@@ -159,6 +277,7 @@ def list_manga(offset: int = 0, limit: int = 100, search: Optional[str] = None):
             "genre": info.get("genre"),
             "cbz_size": cbz_size,
             "cbz_size_formatted": cbz_size_formatted,
+            "mega_cbz_enabled": mega_cbz_enabled,
         })
     
     return success({"items": items, "total": len(items), "offset": offset, "limit": limit})
@@ -741,3 +860,577 @@ def get_chapter_pages(manga_key: str, chapter_num: str):
     
     return error(f"Chapter {chapter_num} not found", code="chapter_not_found", status=404)
 
+
+# ============== MEGA STORAGE ROUTES ==============
+
+@router.get("/manga/mega/status")
+def mega_status():
+    """Check MEGA storage configuration and quota."""
+    from scripts.storage.mega_storage import is_mega_configured, get_mega_storage
+    
+    if not is_mega_configured():
+        return success({
+            "configured": False,
+            "message": "MEGA credentials not configured. Set MEGA_EMAIL and MEGA_PASSWORD environment variables."
+        })
+    
+    try:
+        mega = get_mega_storage()
+        if mega:
+            quota = mega.get_storage_quota()
+            return success({
+                "configured": True,
+                "connected": True,
+                "quota": quota
+            })
+    except Exception as e:
+        return success({
+            "configured": True,
+            "connected": False,
+            "error": str(e)
+        })
+    
+    return success({"configured": True, "connected": False})
+
+
+def _create_chapter_cbz(manga_key: str, chapter: dict, manga_info: dict, output_dir: Path) -> Optional[Path]:
+    """
+    Create a CBZ file for a single chapter.
+    Downloads images and packages them into a CBZ.
+    """
+    import time
+    
+    ch_num = chapter.get("chapter", "0")
+    pages = chapter.get("pages") or []
+    
+    if not pages:
+        return None
+    
+    cbz_filename = f"ch_{ch_num}.cbz"
+    cbz_path = output_dir / cbz_filename
+    
+    # Skip if already exists
+    if cbz_path.exists():
+        _log(f"   📦 Chapter {ch_num} CBZ already exists")
+        return cbz_path
+    
+    _log(f"   📥 Creating CBZ for chapter {ch_num} ({len(pages)} pages)...")
+    
+    # Determine referer
+    source_url = manga_info.get("source_url", "")
+    referer = None
+    if "webtoons.com" in source_url:
+        referer = "https://www.webtoons.com/"
+    elif "manga18" in source_url:
+        referer = "https://manga18.club/"
+    elif "mangadex" in source_url:
+        referer = "https://mangadex.org/"
+    
+    # Create scraper
+    scraper = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
+    )
+    
+    # Download images and create CBZ
+    try:
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for idx, page_url in enumerate(pages):
+                # Determine extension
+                ext = ".jpg"
+                if ".png" in page_url.lower():
+                    ext = ".png"
+                elif ".webp" in page_url.lower():
+                    ext = ".webp"
+                
+                filename = f"{idx+1:04d}{ext}"
+                
+                # Download image
+                headers = {"Accept": "image/*"}
+                if referer:
+                    headers["Referer"] = referer
+                
+                for attempt in range(3):
+                    try:
+                        resp = scraper.get(page_url, timeout=30, headers=headers)
+                        resp.raise_for_status()
+                        if len(resp.content) > 1000:
+                            zf.writestr(filename, resp.content)
+                            break
+                    except Exception as e:
+                        if attempt < 2:
+                            time.sleep(1)
+                        else:
+                            _log(f"      ⚠️ Failed to download page {idx+1}")
+                
+                # Small delay to avoid rate limiting
+                time.sleep(0.1)
+        
+        # Write CBZ to disk
+        buffer.seek(0)
+        cbz_path.write_bytes(buffer.getvalue())
+        _log(f"   ✅ Created: {cbz_filename}")
+        return cbz_path
+        
+    except Exception as e:
+        _log(f"   ❌ Failed to create CBZ: {e}")
+        return None
+
+
+@router.post("/manga/{manga_key}/create-chapter-cbz")
+def create_chapter_cbz(manga_key: str, chapter_start: Optional[str] = None, chapter_end: Optional[str] = None):
+    """
+    Create chapter-wise CBZ files for a manga.
+    
+    Args:
+        manga_key: Manga identifier
+        chapter_start: Start chapter (optional, defaults to first)
+        chapter_end: End chapter (optional, defaults to last)
+    """
+    manga_dir = Path(str(MANGA_DIR)).resolve() / manga_key
+    mf = manga_dir / MANGA_MANIFEST_NAME
+    
+    if not mf.exists():
+        return error("Manga not found", code="not_found", status=404)
+    
+    try:
+        payload = json.loads(mf.read_text(encoding="utf-8"))
+    except Exception as e:
+        return error(f"Failed to read manifest: {e}", code="read_error", status=500)
+    
+    manga_info = payload.get("manga") or {}
+    chapters = payload.get("chapters") or []
+    
+    if not chapters:
+        return error("No chapters in manifest", code="no_chapters", status=404)
+    
+    # Create cbz directory
+    cbz_dir = manga_dir / "cbz"
+    cbz_dir.mkdir(exist_ok=True)
+    
+    # Filter chapters by range
+    if chapter_start or chapter_end:
+        filtered = []
+        for ch in chapters:
+            ch_num = ch.get("chapter", "0")
+            try:
+                ch_float = float(ch_num)
+                start_ok = not chapter_start or ch_float >= float(chapter_start)
+                end_ok = not chapter_end or ch_float <= float(chapter_end)
+                if start_ok and end_ok:
+                    filtered.append(ch)
+            except:
+                filtered.append(ch)
+        chapters = filtered
+    
+    _log(f"📦 Creating {len(chapters)} chapter CBZ files for: {manga_key}")
+    
+    created_cbz = []
+    for ch in chapters:
+        cbz_path = _create_chapter_cbz(manga_key, ch, manga_info, cbz_dir)
+        if cbz_path:
+            created_cbz.append({
+                "chapter": ch.get("chapter"),
+                "filename": cbz_path.name,
+                "size": cbz_path.stat().st_size,
+                "path": str(cbz_path)
+            })
+    
+    return success({
+        "manga_key": manga_key,
+        "cbz_created": len(created_cbz),
+        "files": created_cbz
+    })
+
+
+@router.post("/manga/{manga_key}/upload-cbz-to-mega")
+def upload_cbz_to_mega(manga_key: str, chapter_start: Optional[str] = None, chapter_end: Optional[str] = None):
+    """
+    Create chapter-wise CBZ files and upload them to MEGA.
+    
+    Args:
+        manga_key: Manga identifier
+        chapter_start: Start chapter (optional)
+        chapter_end: End chapter (optional)
+    """
+    from scripts.storage.mega_storage import get_mega_storage, is_mega_configured
+    
+    if not is_mega_configured():
+        return error("MEGA credentials not configured", code="mega_not_configured", status=400)
+    
+    manga_dir = Path(str(MANGA_DIR)).resolve() / manga_key
+    mf = manga_dir / MANGA_MANIFEST_NAME
+    
+    if not mf.exists():
+        return error("Manga not found", code="not_found", status=404)
+    
+    try:
+        payload = json.loads(mf.read_text(encoding="utf-8"))
+    except Exception as e:
+        return error(f"Failed to read manifest: {e}", code="read_error", status=500)
+    
+    manga_info = payload.get("manga") or {}
+    chapters = payload.get("chapters") or []
+    
+    if not chapters:
+        return error("No chapters in manifest", code="no_chapters", status=404)
+    
+    # Filter chapters by range
+    if chapter_start or chapter_end:
+        filtered = []
+        for ch in chapters:
+            ch_num = ch.get("chapter", "0")
+            try:
+                ch_float = float(ch_num)
+                start_ok = not chapter_start or ch_float >= float(chapter_start)
+                end_ok = not chapter_end or ch_float <= float(chapter_end)
+                if start_ok and end_ok:
+                    filtered.append(ch)
+            except:
+                filtered.append(ch)
+        chapters = filtered
+    
+    # Create cbz directory
+    cbz_dir = manga_dir / "cbz"
+    cbz_dir.mkdir(exist_ok=True)
+    
+    _log(f"☁️ Starting MEGA CBZ upload for: {manga_key} ({len(chapters)} chapters)")
+    
+    # Get MEGA storage
+    try:
+        mega = get_mega_storage()
+        if not mega:
+            return error("Failed to connect to MEGA", code="mega_connection_failed", status=500)
+    except Exception as e:
+        return error(f"MEGA connection error: {e}", code="mega_error", status=500)
+    
+    uploaded_files = []
+    failed_files = []
+    
+    import time
+    
+    for ch in chapters:
+        ch_num = ch.get("chapter", "0")
+        
+        # First create the CBZ
+        cbz_path = _create_chapter_cbz(manga_key, ch, manga_info, cbz_dir)
+        
+        if not cbz_path or not cbz_path.exists():
+            failed_files.append(ch_num)
+            continue
+        
+        # Upload to MEGA
+        mega_url = mega.upload_cbz(str(cbz_path), manga_key, ch_num)
+        
+        if mega_url:
+            uploaded_files.append({
+                "chapter": ch_num,
+                "filename": cbz_path.name,
+                "mega_url": mega_url,
+                "size": cbz_path.stat().st_size
+            })
+            
+            # Update chapter in manifest
+            ch["cbz_mega_url"] = mega_url
+        else:
+            failed_files.append(ch_num)
+        
+        # Delay between uploads to avoid rate limiting
+        time.sleep(2)
+    
+    # Get folder link for easy download
+    folder_url = mega.get_folder_link(f"manga/{manga_key}")
+    
+    # Save updated manifest
+    try:
+        payload["mega_cbz"] = {
+            "enabled": True,
+            "folder_url": folder_url,
+            "uploaded_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "chapter_count": len(uploaded_files)
+        }
+        mf.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        _log(f"⚠️ Failed to update manifest: {e}")
+    
+    _log(f"✅ MEGA upload complete: {len(uploaded_files)} CBZ files uploaded, {len(failed_files)} failed")
+    
+    return success({
+        "manga_key": manga_key,
+        "uploaded": len(uploaded_files),
+        "failed": len(failed_files),
+        "folder_url": folder_url,
+        "files": uploaded_files
+    })
+
+
+@router.get("/manga/{manga_key}/mega-folder")
+def get_mega_folder(manga_key: str):
+    """Get MEGA folder URL for direct download."""
+    mf = Path(str(MANGA_DIR)).resolve() / manga_key / MANGA_MANIFEST_NAME
+    if not mf.exists():
+        return error("Manga not found", code="not_found", status=404)
+    
+    try:
+        payload = json.loads(mf.read_text(encoding="utf-8"))
+    except Exception as e:
+        return error(f"Failed to read manifest: {e}", code="read_error", status=500)
+    
+    mega_cbz = payload.get("mega_cbz") or {}
+    
+    if not mega_cbz.get("enabled"):
+        return error("Manga not uploaded to MEGA yet", code="not_uploaded", status=404)
+    
+    return success({
+        "manga_key": manga_key,
+        "folder_url": mega_cbz.get("folder_url"),
+        "chapter_count": mega_cbz.get("chapter_count", 0),
+        "uploaded_at": mega_cbz.get("uploaded_at")
+    })
+
+
+@router.get("/manga/{manga_key}/cbz-list")
+def list_chapter_cbz(manga_key: str):
+    """List available chapter CBZ files (local and MEGA)."""
+    manga_dir = Path(str(MANGA_DIR)).resolve() / manga_key
+    mf = manga_dir / MANGA_MANIFEST_NAME
+    
+    if not mf.exists():
+        return error("Manga not found", code="not_found", status=404)
+    
+    try:
+        payload = json.loads(mf.read_text(encoding="utf-8"))
+    except Exception as e:
+        return error(f"Failed to read manifest: {e}", code="read_error", status=500)
+    
+    chapters = payload.get("chapters") or []
+    cbz_dir = manga_dir / "cbz"
+    
+    cbz_list = []
+    for ch in chapters:
+        ch_num = ch.get("chapter", "0")
+        cbz_filename = f"ch_{ch_num}.cbz"
+        local_path = cbz_dir / cbz_filename
+        
+        cbz_info = {
+            "chapter": ch_num,
+            "title": ch.get("title"),
+            "pages": len(ch.get("pages") or []),
+            "local_exists": local_path.exists(),
+            "local_size": local_path.stat().st_size if local_path.exists() else None,
+            "mega_url": ch.get("cbz_mega_url"),
+        }
+        cbz_list.append(cbz_info)
+    
+    mega_cbz = payload.get("mega_cbz") or {}
+    
+    return success({
+        "manga_key": manga_key,
+        "mega_folder_url": mega_cbz.get("folder_url"),
+        "mega_enabled": mega_cbz.get("enabled", False),
+        "chapters": cbz_list
+    })
+
+
+@router.get("/manga/{manga_key}/download/chapter/{chapter_num}")
+def download_chapter_cbz(manga_key: str, chapter_num: str):
+    """Download a single chapter CBZ file."""
+    manga_dir = Path(str(MANGA_DIR)).resolve() / manga_key
+    cbz_dir = manga_dir / "cbz"
+    cbz_path = cbz_dir / f"ch_{chapter_num}.cbz"
+    
+    if cbz_path.exists():
+        return FileResponse(
+            path=str(cbz_path),
+            media_type="application/zip",
+            filename=cbz_path.name
+        )
+    
+    # Try to create it on the fly
+    mf = manga_dir / MANGA_MANIFEST_NAME
+    if not mf.exists():
+        return error("Manga not found", code="not_found", status=404)
+    
+    try:
+        payload = json.loads(mf.read_text(encoding="utf-8"))
+    except:
+        return error("Failed to read manifest", code="read_error", status=500)
+    
+    manga_info = payload.get("manga") or {}
+    chapters = payload.get("chapters") or []
+    
+    for ch in chapters:
+        if ch.get("chapter") == chapter_num:
+            cbz_dir.mkdir(exist_ok=True)
+            cbz_path = _create_chapter_cbz(manga_key, ch, manga_info, cbz_dir)
+            if cbz_path and cbz_path.exists():
+                return FileResponse(
+                    path=str(cbz_path),
+                    media_type="application/zip",
+                    filename=cbz_path.name
+                )
+    
+    return error(f"Chapter {chapter_num} not found", code="chapter_not_found", status=404)
+
+
+@router.get("/manga/{manga_key}/download/range")
+def download_chapter_range(
+    manga_key: str, 
+    from_chapter: Optional[str] = None, 
+    to_chapter: Optional[str] = None
+):
+    """
+    Download multiple chapters as a single ZIP containing CBZ files.
+    
+    Args:
+        manga_key: Manga identifier
+        from_chapter: Start chapter number (inclusive, optional - defaults to first)
+        to_chapter: End chapter number (inclusive, optional - defaults to last)
+    """
+    import zipfile
+    import tempfile
+    
+    manga_dir = Path(str(MANGA_DIR)).resolve() / manga_key
+    mf = manga_dir / MANGA_MANIFEST_NAME
+    
+    if not mf.exists():
+        return error("Manga not found", code="not_found", status=404)
+    
+    try:
+        payload = json.loads(mf.read_text(encoding="utf-8"))
+    except Exception as e:
+        return error(f"Failed to read manifest: {e}", code="read_error", status=500)
+    
+    manga_info = payload.get("manga") or {}
+    chapters = payload.get("chapters") or []
+    
+    if not chapters:
+        return error("No chapters available", code="no_chapters", status=404)
+    
+    # Sort chapters numerically
+    def chapter_sort_key(ch):
+        try:
+            return float(ch.get("chapter", "0"))
+        except:
+            return 0
+    
+    chapters_sorted = sorted(chapters, key=chapter_sort_key)
+    
+    # Filter by range
+    filtered_chapters = []
+    for ch in chapters_sorted:
+        ch_num = ch.get("chapter", "0")
+        try:
+            ch_float = float(ch_num)
+            start_ok = not from_chapter or ch_float >= float(from_chapter)
+            end_ok = not to_chapter or ch_float <= float(to_chapter)
+            if start_ok and end_ok:
+                filtered_chapters.append(ch)
+        except:
+            # Non-numeric chapters: include if no range specified
+            if not from_chapter and not to_chapter:
+                filtered_chapters.append(ch)
+    
+    if not filtered_chapters:
+        return error("No chapters in specified range", code="no_chapters_in_range", status=404)
+    
+    # Create CBZ directory
+    cbz_dir = manga_dir / "cbz"
+    cbz_dir.mkdir(exist_ok=True)
+    
+    # Create temp file for the ZIP
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip_path = temp_zip.name
+    temp_zip.close()
+    
+    _log(f"📦 Creating range download for {manga_key}: {len(filtered_chapters)} chapters")
+    
+    try:
+        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_STORED) as zf:
+            for ch in filtered_chapters:
+                ch_num = ch.get("chapter", "0")
+                cbz_filename = f"ch_{ch_num}.cbz"
+                cbz_path = cbz_dir / cbz_filename
+                
+                # Create CBZ if it doesn't exist
+                if not cbz_path.exists():
+                    cbz_path = _create_chapter_cbz(manga_key, ch, manga_info, cbz_dir)
+                
+                if cbz_path and cbz_path.exists():
+                    zf.write(cbz_path, cbz_filename)
+                    _log(f"   Added: {cbz_filename}")
+        
+        # Determine filename
+        range_str = ""
+        if from_chapter and to_chapter:
+            range_str = f"_ch{from_chapter}-{to_chapter}"
+        elif from_chapter:
+            range_str = f"_ch{from_chapter}-end"
+        elif to_chapter:
+            range_str = f"_ch1-{to_chapter}"
+        
+        download_filename = f"{manga_key}{range_str}.zip"
+        
+        return FileResponse(
+            path=temp_zip_path,
+            media_type="application/zip",
+            filename=download_filename,
+            background=BackgroundTask(lambda: os.unlink(temp_zip_path))
+        )
+        
+    except Exception as e:
+        # Clean up on error
+        try:
+            os.unlink(temp_zip_path)
+        except:
+            pass
+        return error(f"Failed to create ZIP: {e}", code="zip_error", status=500)
+
+
+@router.get("/manga/{manga_key}/chapters-info")
+def get_chapters_info(manga_key: str):
+    """Get chapter information for range selection."""
+    manga_dir = Path(str(MANGA_DIR)).resolve() / manga_key
+    mf = manga_dir / MANGA_MANIFEST_NAME
+    
+    if not mf.exists():
+        return error("Manga not found", code="not_found", status=404)
+    
+    try:
+        payload = json.loads(mf.read_text(encoding="utf-8"))
+    except:
+        return error("Failed to read manifest", code="read_error", status=500)
+    
+    chapters = payload.get("chapters") or []
+    
+    # Sort chapters numerically
+    def chapter_sort_key(ch):
+        try:
+            return float(ch.get("chapter", "0"))
+        except:
+            return 0
+    
+    chapters_sorted = sorted(chapters, key=chapter_sort_key)
+    
+    chapter_list = []
+    for ch in chapters_sorted:
+        ch_num = ch.get("chapter", "0")
+        cbz_path = manga_dir / "cbz" / f"ch_{ch_num}.cbz"
+        chapter_list.append({
+            "chapter": ch_num,
+            "title": ch.get("title", f"Chapter {ch_num}"),
+            "pages": len(ch.get("pages") or []),
+            "has_cbz": cbz_path.exists(),
+            "mega_url": ch.get("cbz_mega_url")
+        })
+    
+    first_ch = chapter_list[0]["chapter"] if chapter_list else "1"
+    last_ch = chapter_list[-1]["chapter"] if chapter_list else "1"
+    
+    return success({
+        "manga_key": manga_key,
+        "total_chapters": len(chapter_list),
+        "first_chapter": first_ch,
+        "last_chapter": last_ch,
+        "chapters": chapter_list
+    })
