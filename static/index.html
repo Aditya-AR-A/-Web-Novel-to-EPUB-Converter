@@ -1,1824 +1,368 @@
 <!DOCTYPE html>
-<html lang='en'>
+<html lang="en">
 
 <head>
-    <meta charset='UTF-8' />
-    <title>Web Novel → EPUB</title>
-    <meta name='viewport' content='width=device-width,initial-scale=1' />
-    <link rel="icon" href="/static/logo.png" type="image/png" />
-    <style>
-        :root {
-            color-scheme: dark light;
-            --bg: #0d1117;
-            --bg-alt: #161b22;
-            --bg-accent: #1e2530;
-            --panel: #1b222c;
-            --panel-alt: #243041;
-            --border: #2d3745;
-            --text: #e6edf3;
-            --text-dim: #8b97a5;
-            --accent: #3b82f6;
-            --accent-hover: #2563eb;
-            --danger: #dc2626;
-            --danger-hover: #b91c1c;
-            --header-g1: #111a25;
-            --header-g2: #16202c;
-            --header-g3: #1d2835;
-            --resizer-bg: #ffffff10;
-            --resizer-hover-bg: #ffffff18;
-            --input-bg: #0f141a;
-            --input-border: #2b3644;
-            --input-bg-focus: #101923;
-            --secondary-border: #2d3a48;
-            --secondary-hover-bg: #263242;
-            --secondary-hover-border: #3a4b5e;
-            --row-hover-bg: #1f2935;
-            --badge-bg: #4338ca;
-            --spinner-border: #ffffff40;
-            --spinner-top: #fff;
-            --log-bg: #0a0f14;
-            --log-inset1: #1f2933;
-            --log-inset2: #0d141b;
-            --page-bg: radial-gradient(circle at 25% 15%, #19202b 0%, #0d1117 55%) fixed;
-            --radius: 14px;
-            --radius-sm: 8px;
-            --shadow-sm: 0 2px 4px -1px #0007, 0 1px 2px -1px #0009;
-            --shadow: 0 6px 18px -8px #000a, 0 3px 8px -3px #0008;
-            --focus: 0 0 0 2px #0d1117, 0 0 0 4px var(--accent);
-            --sidebar-width: 380px;
-            --header-height: 86px; /* will be updated dynamically via JS */
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        }
-
-        :root.light {
-            --bg: #f5f7fa;
-            --bg-alt: #ffffff;
-            --bg-accent: #e8eef5;
-            --panel: #ffffff;
-            --panel-alt: #f4f7fb;
-            --border: #d9e1ea;
-            --text: #1e2933;
-            --text-dim: #526170;
-            --accent: #2563eb;
-            --accent-hover: #1d4ed8;
-            --danger: #dc2626;
-            --danger-hover: #b91c1c;
-            --header-g1: #f6f9fc;
-            --header-g2: #eef3f9;
-            --header-g3: #e9eff7;
-            --resizer-bg: #00000010;
-            --resizer-hover-bg: #0000001f;
-            --input-bg: #ffffff;
-            --input-border: #d9e1ea;
-            --input-bg-focus: #f4f7fb;
-            --secondary-border: #cbd5e1;
-            --secondary-hover-bg: #e2e9f2;
-            --secondary-hover-border: #c0cbd9;
-            --row-hover-bg: #eef3f9;
-            --badge-bg: #4338ca;
-            --spinner-border: #00000020;
-            --spinner-top: #000;
-            --log-bg: #f6f9fc;
-            --log-inset1: #e3eaf2;
-            --log-inset2: #eaeff6;
-            --page-bg: radial-gradient(circle at 25% 15%, #eef3f9 0%, #ffffff 55%) fixed;
-            color-scheme: light;
-        }
-
-        /* Logo styling */
-        .logo {
-            height: 28px;
-            width: auto;
-            display: block;
-            border-radius: 6px;
-            box-shadow: 0 2px 6px #0006;
-        }
-
-        body {
-            margin: 0;
-            background: var(--page-bg);
-            color: var(--text);
-            -webkit-font-smoothing: antialiased;
-        }
-
-        header {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            backdrop-filter: blur(10px);
-            background: linear-gradient(90deg, var(--header-g1), var(--header-g2) 55%, var(--header-g3));
-            border-bottom: 1px solid var(--border);
-            padding: 1rem 1.5rem 1.1rem;
-            box-shadow: var(--shadow-sm);
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 1.15rem;
-            letter-spacing: .5px;
-            font-weight: 600;
-        }
-
-        main {
-            max-width: 1400px;
-            margin: 1.7rem auto 4rem;
-            padding: 0 0 0 1.25rem;
-        }
-
-        /* Two-column layout with collapsible and resizable sidebar */
-        .layout {
-            display: grid;
-            grid-template-columns: 1fr 10px var(--sidebar-width);
-            gap: 1.1rem;
-            align-items: start;
-        }
-
-        .resizer {
-            width: 10px;
-            cursor: col-resize;
-            position: relative;
-            border-radius: 8px;
-        }
-
-        .resizer:before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            border-radius: 8px;
-            background: var(--resizer-bg);
-            border: 1px dashed var(--border);
-        }
-
-        .resizer:hover:before {
-            background: var(--resizer-hover-bg);
-        }
-
-        .resizing .resizer:before {
-            background: #3b82f640;
-            border-color: #3b82f6;
-        }
-
-        .sidebar {
-            position: sticky;
-            top: var(--header-height, 86px);
-            height: calc(90vh - var(--header-height, 86px));
-            display: flex;
-            flex-direction: column;
-            gap: .8rem;
-        }
-
-        /* Allow the logs section to grow and its inner content to scroll */
-        .sidebar .status-wrap {
-            flex: 1 1 auto;
-            min-height: 0; /* critical for scrollable children in flex containers */
-        }
-
-        .sidebar .card {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            min-height: 0; /* allow inner .status-bar to establish its own scrolling */
-        }
-
-        .sidebar .status-wrap {
-            margin: 0;
-        }
-
-        .sidebar .status-bar {
-            flex: 1 1 auto;
-            min-height: 0;
-            overflow: auto; /* ensure scrolling is enabled */
-            overscroll-behavior: contain; /* keep scroll gestures contained */
-        }
-
-        .logs-collapsed .sidebar {
-            display: none;
-        }
-
-        .logs-collapsed .resizer {
-            display: none;
-        }
-
-        .logs-collapsed .layout {
-            grid-template-columns: 1fr;
-        }
-
-        @media (max-width: 980px) {
-            .layout {
-                grid-template-columns: 1fr;
-            }
-
-            .sidebar {
-                position: static;
-                height: auto;
-            }
-
-            .resizer {
-                display: none;
-            }
-        }
-
-        .card {
-            background: linear-gradient(145deg, var(--panel), var(--panel-alt));
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.05rem 1.15rem 1.25rem;
-            box-shadow: var(--shadow);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .card:before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            background: linear-gradient(120deg, #ffffff09, #ffffff00 40%);
-            mix-blend-mode: overlay;
-        }
-
-        form#genForm {
-            display: flex;
-            flex-direction: column;
-            gap: .9rem;
-            align-items: flex-start;
-        }
-
-        form label {
-            font-size: .68rem;
-            text-transform: uppercase;
-            letter-spacing: .9px;
-            opacity: .75;
-            display: block;
-            margin: 0 0 .4rem;
-            font-weight: 600;
-        }
-
-        form input[type=text],
-        form input[type=number] {
-            width: 100%;
-            padding: .62rem .75rem;
-            border: 1px solid #2b3644;
-            background: #0f141a;
-            color: var(--text);
-            border-radius: var(--radius-sm);
-            font-size: .95rem;
-            line-height: 1.2;
-            transition: .18s border, .18s background, .18s box-shadow;
-        }
-
-        form input:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: var(--focus);
-            background: #101923;
-        }
-
-        form .field {
-            min-width: 0;
-        }
-
-        .field.url {
-            width: 100%;
-        }
-
-        .field.narrow {
-            width: 240px;
-            max-width: 100%;
-        }
-
-        .field.buttons {
-            display: flex;
-            gap: .6rem;
-            align-items: center;
-        }
-
-        @media (max-width:620px) {
-            .field.narrow {
-                width: 100%;
-            }
-        }
-
-        button {
-            font-family: inherit;
-        }
-
-        button.primary {
-            background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-            color: #fff;
-            border: none;
-            padding: .78rem 1.25rem;
-            font-weight: 600;
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: .55rem;
-            font-size: .9rem;
-            letter-spacing: .3px;
-            box-shadow: 0 4px 14px -6px #000c, 0 2px 4px -2px #000a;
-            position: relative;
-            overflow: hidden;
-            transition: .2s transform, .25s box-shadow;
-        }
-
-        button.primary:before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            background: linear-gradient(120deg, #ffffff33 10%, transparent 60%);
-            opacity: 0;
-            transition: .4s;
-        }
-
-        button.primary:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px -10px #000c, 0 3px 9px -3px #000a;
-        }
-
-        button.primary:hover:before {
-            opacity: 1;
-        }
-
-        button.primary:active {
-            transform: translateY(0);
-        }
-
-        button.primary:disabled {
-            opacity: .5;
-            cursor: progress;
-        }
-
-        button.secondary {
-            background: var(--bg-accent);
-            color: var(--text);
-            border: 1px solid #2d3a48;
-            padding: .55rem .95rem;
-            font-size: .78rem;
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-            display: inline-flex;
-            gap: .45rem;
-            align-items: center;
-            font-weight: 500;
-            letter-spacing: .3px;
-            transition: .18s background, .18s border, .18s color;
-        }
-
-        button.secondary:hover {
-            background: #263242;
-            border-color: #3a4b5e;
-        }
-
-        button.secondary.danger,
-        .danger {
-            background: linear-gradient(120deg, var(--danger), var(--danger-hover));
-            border: 1px solid #631616;
-            color: #fff;
-        }
-
-        button.secondary.danger:hover,
-        .danger:hover {
-            filter: brightness(1.05);
-        }
-
-        section {
-            margin-top: 2.25rem;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0 3px;
-            font-size: .83rem;
-        }
-
-        thead th {
-            font-size: .6rem;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 600;
-            color: var(--text-dim);
-            padding: .35rem .55rem .55rem;
-        }
-
-        tbody td {
-            background: var(--bg-alt);
-            border-top: 1px solid #263240;
-            border-bottom: 1px solid #1a222c;
-            padding: .55rem .65rem;
-        }
-
-        tbody tr td:first-child {
-            border-left: 1px solid #263240;
-            border-top-left-radius: 10px;
-            border-bottom-left-radius: 10px;
-        }
-
-        tbody tr td:last-child {
-            border-right: 1px solid #263240;
-            border-top-right-radius: 10px;
-            border-bottom-right-radius: 10px;
-        }
-
-        tbody tr {
-            transition: .18s background, .18s transform;
-        }
-
-        tbody tr:hover td {
-            background: #1f2935;
-        }
-
-        tbody tr:active td {
-            transform: scale(.995);
-        }
-
-        .actions {
-            display: flex;
-            gap: .55rem;
-            flex-wrap: wrap;
-            margin-top: .75rem;
-        }
-
-        .actions .field.search input {
-            min-width: 220px;
-            background: var(--input-bg);
-            border: 1px solid var(--input-border);
-            border-radius: var(--radius-sm);
-            padding: .45rem .65rem;
-            font-size: .8rem;
-            color: var(--text);
-            transition: .18s border, .18s background, .18s box-shadow;
-        }
-
-        .actions .field.search input:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: var(--focus);
-            background: var(--input-bg-focus);
-        }
-
-        .actions .checkbox-control {
-            display: inline-flex;
-            align-items: center;
-            gap: .35rem;
-            font-size: .72rem;
-            padding: .45rem .65rem;
-        }
-
-        .actions .checkbox-control input {
-            width: 16px;
-            height: 16px;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-
-        .epub-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-            gap: 1.2rem;
-            align-items: stretch;
-        }
-
-        .epub-list {
-            display: flex;
-            flex-direction: column;
-            gap: 1.05rem;
-        }
-
-        .novel-card,
-        .epub-card {
-            background: var(--bg-alt);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            box-shadow: var(--shadow);
-            position: relative;
-            overflow: hidden;
-            transition: transform .18s ease, box-shadow .18s ease;
-        }
-
-        .novel-card:hover,
-        .epub-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 16px 34px -22px #000c, 0 8px 18px -10px #0009;
-        }
-
-        .novel-card {
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        .list-card .novel-card .select-box,
-        .epub-card > .select-box,
-        .novel-card .select-box {
-            position: absolute;
-            top: 14px;
-            left: 16px;
-            background: rgba(10, 14, 20, 0.55);
-            border-radius: 999px;
-            padding: .4rem .55rem;
-            display: inline-flex;
-            align-items: center;
-            gap: .35rem;
-            box-shadow: 0 12px 26px -18px #000, 0 4px 12px -10px #000;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            backdrop-filter: blur(8px);
-            z-index: 2;
-        }
-
-        .novel-card .select-box input,
-        .epub-card > .select-box input {
-            width: 18px;
-            height: 18px;
-        }
-
-        .novel-card .select-box span,
-        .epub-card > .select-box span {
-            font-size: .72rem;
-            color: #fff;
-            font-weight: 600;
-        }
-
-        .novel-header {
-            display: grid;
-            grid-template-columns: auto 1fr;
-            gap: 1.35rem;
-            padding: 1.25rem 1.35rem 1.1rem;
-            align-items: stretch;
-        }
-
-        @media (max-width: 720px) {
-            .novel-header {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .cover-frame {
-            width: 118px;
-            aspect-ratio: 3 / 4;
-            border-radius: 14px;
-            overflow: hidden;
-            background: linear-gradient(145deg, #1a2431, #0f141c);
-            box-shadow: 0 16px 32px -22px #000c, 0 6px 16px -12px #0008;
-            position: relative;
-            flex-shrink: 0;
-        }
-
-        .cover-frame img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            display: block;
-            transition: transform .25s ease;
-        }
-
-        .novel-card:hover .cover-frame img {
-            transform: scale(1.02);
-        }
-
-        .cover-frame.placeholder {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #ffffff4d;
-            font-size: .78rem;
-            letter-spacing: .6px;
-            text-transform: uppercase;
-        }
-
-        .novel-header .meta {
-            display: flex;
-            flex-direction: column;
-            gap: .6rem;
-            flex: 1 1 auto;
-            min-width: 0;
-        }
-
-        .novel-header h3 {
-            margin: 0;
-            font-size: 1.08rem;
-            line-height: 1.35;
-        }
-
-        .novel-header .author {
-            font-size: .72rem;
-            letter-spacing: .6px;
-            text-transform: uppercase;
-            color: var(--text-dim);
-            margin: 0;
-        }
-
-        .novel-header .description {
-            font-size: .82rem;
-            color: var(--text-dim);
-            line-height: 1.55;
-            max-width: 760px;
-        }
-
-        .novel-header .quick-meta {
-            font-size: .72rem;
-            color: var(--text-dim);
-            display: flex;
-            gap: .65rem;
-            flex-wrap: wrap;
-        }
-
-        .novel-actions {
-            display: flex;
-            gap: .6rem;
-            flex-wrap: wrap;
-            align-items: center;
-            margin-top: .35rem;
-        }
-
-        .toggle-files {
-            background: var(--bg-accent);
-            color: var(--text);
-            border: 1px solid var(--secondary-border);
-            padding: .45rem .8rem;
-            border-radius: var(--radius-sm);
-            font-size: .78rem;
-            display: inline-flex;
-            align-items: center;
-            gap: .4rem;
-            cursor: pointer;
-            transition: .18s background, .18s border;
-        }
-
-        .toggle-files:hover {
-            background: var(--secondary-hover-bg);
-            border-color: var(--secondary-hover-border);
-        }
-
-        .epub-card {
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-            padding-bottom: 1rem;
-        }
-
-        .epub-card > .select-box {
-            left: 14px;
-        }
-
-        .epub-card .cover-wrap {
-            position: relative;
-            aspect-ratio: 3 / 4;
-            width: 100%;
-            overflow: hidden;
-            border-top-left-radius: calc(var(--radius) - 2px);
-            border-top-right-radius: calc(var(--radius) - 2px);
-            background: linear-gradient(150deg, #1c2430, #11171f);
-        }
-
-        .epub-card .cover-wrap img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            display: block;
-            transition: transform .25s ease;
-        }
-
-        .epub-card:hover .cover-wrap img {
-            transform: scale(1.03);
-        }
-
-        .epub-card .cover-placeholder {
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #ffffff45;
-            letter-spacing: .7px;
-            font-size: .82rem;
-            text-transform: uppercase;
-        }
-
-        .epub-card .size-badge {
-            position: absolute;
-            bottom: 12px;
-            right: 12px;
-            background: rgba(12, 17, 24, 0.68);
-            color: #fff;
-            font-size: .68rem;
-            padding: .27rem .6rem;
-            border-radius: 999px;
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            backdrop-filter: blur(8px);
-        }
-
-        .epub-card .card-body {
-            display: flex;
-            flex-direction: column;
-            gap: .45rem;
-            padding: .95rem 1.05rem 0;
-            min-height: 0;
-        }
-
-        .epub-card .card-body h3 {
-            margin: 0;
-            font-size: .96rem;
-            line-height: 1.35;
-        }
-
-        .epub-card .author {
-            font-size: .68rem;
-            text-transform: uppercase;
-            letter-spacing: .5px;
-            color: var(--text-dim);
-            margin: 0;
-        }
-
-        .epub-card .meta-line {
-            display: flex;
-            gap: .55rem;
-            flex-wrap: wrap;
-            font-size: .7rem;
-            color: var(--text-dim);
-        }
-
-        .epub-card .card-actions {
-            display: flex;
-            gap: .5rem;
-            flex-wrap: wrap;
-            margin-top: .35rem;
-        }
-
-        .epub-card .no-files {
-            font-size: .7rem;
-            color: var(--text-dim);
-            padding: .1rem 0;
-        }
-
-        .epub-card .desc {
-            font-size: .74rem;
-            line-height: 1.4;
-            color: var(--text-dim);
-            margin: 0;
-            max-height: 0;
-            opacity: 0;
-            overflow: hidden;
-            transition: max-height .25s ease, opacity .25s ease;
-        }
-
-        .epub-card:hover .desc,
-        .epub-card:focus-within .desc {
-            max-height: 7.5rem;
-            opacity: 1;
-        }
-
-        .files-wrapper {
-            border-top: 1px solid var(--border);
-            background: linear-gradient(165deg, var(--panel), var(--panel-alt));
-            display: none;
-        }
-
-        .files-wrapper.open {
-            display: block;
-        }
-
-        .files-list {
-            display: flex;
-            flex-direction: column;
-            gap: .6rem;
-            padding: .9rem 1rem 1.1rem;
-        }
-
-        .file-row {
-            display: flex;
-            flex-direction: column;
-            gap: .45rem;
-            padding: .75rem .85rem;
-            background: var(--bg-alt);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-        }
-
-        .file-row .file-top {
-            display: flex;
-            align-items: center;
-            gap: .65rem;
-            flex-wrap: wrap;
-        }
-
-        .file-row .file-top strong {
-            font-size: .85rem;
-        }
-
-        .file-row .file-meta {
-            font-size: .72rem;
-            color: var(--text-dim);
-            display: flex;
-            gap: .6rem;
-            flex-wrap: wrap;
-        }
-
-        .file-row .file-actions {
-            display: flex;
-            gap: .5rem;
-            flex-wrap: wrap;
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 1.6rem 1rem;
-            font-size: .85rem;
-            opacity: .65;
-        }
-
-        .file-cell {
-            display: flex;
-            align-items: center;
-            gap: .75rem;
-        }
-
-        .file-thumb {
-            width: 48px;
-            height: 64px;
-            border-radius: 8px;
-            object-fit: cover;
-            box-shadow: 0 4px 12px -6px #0009;
-            background: #15202b;
-            flex-shrink: 0;
-        }
-
-        .file-meta {
-            display: flex;
-            flex-direction: column;
-            gap: .18rem;
-            min-width: 0;
-        }
-
-        .file-title {
-            font-weight: 600;
-            font-size: .88rem;
-            line-height: 1.2;
-            color: var(--text);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .file-name {
-            font-size: .72rem;
-            color: var(--text-dim);
-            letter-spacing: .3px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .file-size {
-            font-size: .7rem;
-            color: var(--text-dim);
-        }
-
-        .status-wrap {
-            margin-top: 1.35rem;
-        }
-
-        .status-bar {
-            margin-top: .65rem;
-            font-family: ui-monospace, monospace;
-            white-space: pre-line;
-            background: var(--log-bg);
-            padding: .8rem .9rem 1rem;
-            border-radius: 12px;
-            overflow: auto;
-            font-size: .68rem;
-            line-height: 1.32;
-            box-shadow: inset 0 0 0 1px var(--log-inset1), 0 0 0 1px var(--log-inset2);
-            position: relative;
-        }
-
-        .log-info {
-            color: var(--text-dim);
-        }
-
-        .log-err {
-            color: #f87171;
-        }
-
-        .log-warn {
-            color: #facc15;
-        }
-
-        .spinner {
-            width: 14px;
-            height: 14px;
-            border: 3px solid var(--spinner-border);
-            border-top-color: var(--spinner-top);
-            border-radius: 50%;
-            animation: spin .8s linear infinite;
-        }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        .status-bar:before {
-            content: "Logs";
-            position: absolute;
-            top: 4px;
-            right: 10px;
-            font-size: .55rem;
-            opacity: .4;
-            letter-spacing: 1px;
-        }
-
-        .flex {
-            display: flex;
-            gap: .75rem;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-
-        .grow {
-            flex: 1 1 auto;
-        }
-
-        a.dl {
-            color: var(--accent);
-            text-decoration: none;
-            font-weight: 500;
-        }
-
-        a.dl:hover {
-            text-decoration: underline;
-        }
-
-        footer {
-            margin: 3.5rem 0 2.4rem;
-            text-align: center;
-            font-size: .6rem;
-            opacity: .45;
-            letter-spacing: .8px;
-        }
-
-        .inline-badge {
-            background: #4338ca;
-            color: #fff;
-            font-size: .55rem;
-            padding: .18rem .5rem .2rem;
-            border-radius: 6px;
-            vertical-align: middle;
-            margin-left: .45rem;
-            letter-spacing: .6px;
-            font-weight: 600;
-            box-shadow: 0 2px 6px -3px #0009;
-        }
-
-        .helper-text {
-            font-size: .6rem;
-            opacity: .6;
-            max-width: 260px;
-            line-height: 1.3;
-        }
-
-        .fade-in {
-            animation: fade .4s ease;
-        }
-
-        @keyframes fade {
-            from {
-                opacity: 0;
-                transform: translateY(4px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        ::selection {
-            background: var(--accent);
-            color: #fff;
-        }
-
-        input[type=checkbox] {
-            cursor: pointer;
-        }
-
-        @media (max-width:880px) {
-            .actions {
-                width: 100%;
-            }
-
-            header {
-                position: static;
-            }
-        }
-    </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes" />
+    <meta name="theme-color" content="#1e1e2e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Web Novel & Manga Converter</title>
+    <link rel="icon" href="/static/images/logo.svg" type="image/png" />
+    <link rel="stylesheet" href="/static/css/main.css" />
+    <!-- No-JS fallback styles -->
+    <noscript>
+        <style>
+            .js-only { display: none !important; }
+            .no-js-show { display: block !important; }
+            .tab-panel { display: block !important; }
+            .manga-grid, .epub-grid { display: block !important; }
+            .manga-card { display: inline-block; width: 45%; margin: 1%; vertical-align: top; }
+            @media (max-width: 600px) { .manga-card { width: 100%; margin: 0.5rem 0; } }
+        </style>
+    </noscript>
 </head>
 
 <body>
     <header>
-        <div style='display:flex;align-items:center;gap:.85rem;'>
-            <img src="/static/logo.png" alt="Logo" class="logo" />
-            <h1 style='flex:1 1 auto;'>Web Novel → EPUB </h1>
-            <button id='logsToggle' class='secondary' style='font-size:.65rem;padding:.5rem .7rem;'
-                title='Toggle logs sidebar'>🪵 Logs</button>
-            <button id='themeToggle' class='secondary' style='font-size:.65rem;padding:.5rem .7rem;'
-                title='Toggle light/dark theme'>🌗 Theme</button>
+        <div class="header-inner">
+            <img src="/static/images/logo.svg" alt="Logo" class="logo" />
+            <h1 class="page-title">Web Novel & Manga Converter</h1>
+            <button id="logsToggle" class="secondary toolbar-button" type="button" title="Toggle logs sidebar"
+                aria-label="Toggle logs sidebar">
+                <img src="/static/images/logs.svg" alt="" class="icon" aria-hidden="true" />
+            </button>
+            <button id="themeToggle" class="secondary toolbar-button" type="button" title="Toggle light/dark theme"
+                aria-label="Toggle light or dark theme">
+                <span class="icon" aria-hidden="true">🌗</span>
+            </button>
         </div>
     </header>
     <main>
-        <div class='layout'>
-            <div class='content'>
-                <div class='card fade-in'>
-                    <form id='genForm'>
-                        <div class='field url' style='min-width:260px;'>
-                            <label>Novel URL</label>
-                            <input type='text' id='url' placeholder='https://freewebnovel.com/novel/...'>
-                        </div>
-                        <div class='field narrow'>
-                            <label>Chapters / Book</label>
-                            <input type='number' id='chapters_per_book' placeholder='500 (default)' min='10' step='10'>
-                        </div>
-                        <div class='field narrow'>
-                            <label>Chapter Workers</label>
-                            <input type='number' id='chapter_workers' placeholder='1 (default)' min='1' max='16'>
-                        </div>
-                        <div class='field narrow'>
-                            <label>Limit Chapters</label>
-                            <input type='number' id='chapter_limit' placeholder='0 = all (default)' min='0'>
-                        </div>
-                        <div class='field narrow'>
-                            <label>Start Chapter</label>
-                            <input type='number' id='start_chapter' placeholder='1 (default)' min='1'>
-                        </div>
-                        <div class='field buttons'>
-                            <button type='submit' class='primary' id='genBtn'>Generate EPUB</button>
-                            <button type='button' class='secondary danger' id='cancelBtn' disabled>Cancel</button>
-                            <button type='button' class='secondary' id='stopBtn' disabled>Stop (save partial)</button>
-                        </div>
-                        <div class='grow'></div>
-                        <div class='helper-text'>Uses server API; this UI is optional. For programmatic use see
-                            <code>/docs</code>.
-                        </div>
-                    </form>
+        <div class="layout">
+            <div class="content">
+                <!-- Tab Navigation -->
+                <div class="tabs-nav">
+                    <button class="tab-btn active" data-tab="novels-tab">📚 Web Novels</button>
+                    <button class="tab-btn" data-tab="manga-tab">🖼️ Manga</button>
                 </div>
 
-                <section class='fade-in' style='animation-delay:.05s;'>
-                    <div class='flex'>
-                        <h2 style='font-size:.95rem; margin:.15rem 0 .4rem; font-weight:600; letter-spacing:.5px;'>
-                            Available EPUBs</h2>
-                        <div class='grow'></div>
-                        <div class='actions'>
-                            <div class='field search'>
-                                <input type='search' id='searchInput' placeholder='Search novels, authors, or files'>
+                <!-- Web Novels Tab -->
+                <div id="novels-tab" class="tab-panel active">
+                    <div class="card fade-in">
+                        <form id="genForm">
+                            <div class="flex">
+                                <div class="field url">
+                                    <label for="url">Novel URL</label>
+                                    <input type="text" id="url" placeholder="https://freewebnovel.com/novel/..." required />
+                                </div>
+                                <div class="field narrow">
+                                    <label for="chapters_per_book">Chapters per EPUB</label>
+                                    <input type="number" id="chapters_per_book" min="1" value="500" />
+                                </div>
+                                <div class="field narrow">
+                                    <label for="chapter_workers">Chapter workers</label>
+                                    <input type="number" id="chapter_workers" min="1" value="1" />
+                                </div>
+                                <div class="field narrow">
+                                    <label for="chapter_limit">Chapter limit</label>
+                                    <input type="number" id="chapter_limit" min="0"  placeholder="Max" />
+                                </div>
+                                <div class="field narrow">
+                                    <label for="start_chapter">Start chapter</label>
+                                    <input type="number" id="start_chapter" min="1" value="1" />
+                                </div>
                             </div>
-                            <label class='secondary checkbox-control' for='selectAll'>
-                                <input type='checkbox' id='selectAll'>
-                                <span>Select all</span>
+                            <div class="flex buttons">
+                                <button id="genBtn" class="primary" type="submit">Generate EPUBs</button>
+                                <button id="stopBtn" class="secondary" type="button" disabled title="Stop after current"
+                                    aria-label="Stop after current">
+                                    <img src="/static/images/stop.svg" alt="" class="icon" aria-hidden="true" />
+                                </button>
+                                <button id="cancelBtn" class="secondary" type="button" disabled title="Cancel generation"
+                                    aria-label="Cancel generation">
+                                    <img src="/static/images/close.svg" alt="" class="icon" aria-hidden="true" />
+                                </button>
+                            </div>
+                            <p class="helper-text">Runs the scraper and packages chapters into EPUB files. Use Cancel to
+                                abort immediately or Stop After Current to finish the ongoing chapter gracefully.</p>
+                        </form>
+                    </div>
+
+                    <div class="card controls-card">
+                        <div class="actions control-toolbar">
+                            <label class="checkbox-control" title="Select all files">
+                                <input type="checkbox" id="selectAll" />
+                                <span class="sr-only">Select all files</span>
                             </label>
-                            <button class='secondary' id='refreshBtn' title='Refresh list'>Refresh</button>
-                            <select id='pageSize' class='secondary' style='min-width:90px;'>
-                                <option value='10'>10</option>
-                                <option value='20' selected>20</option>
-                                <option value='50'>50</option>
-                                <option value='100'>100</option>
-                            </select>
-                            <button class='secondary' id='viewToggleBtn' title='Toggle list/grid view'>Grid View</button>
-                            <div id='pager' style='display:flex;align-items:center;gap:.4rem;'></div>
-                            <button class='secondary' id='downloadSelBtn' disabled>Download Selected</button>
-                            <button class='secondary' id='downloadAllBtn'>Download All</button>
-                            <button class='secondary danger' id='deleteSelBtn' disabled>Delete Selected</button>
-                            <button class='secondary danger' id='deleteAllBtn'>Delete All</button>
+                            <div class="field search">
+                                <input type="text" id="searchInput" placeholder="Filter by title or file name" />
+                            </div>
+                            <div class="actions-right">
+                                <div class="pager" id="pager"></div>
+                                <div class="field narrow page-size-field">
+                                </div>
+                                <select id="pageSize" class="page-size-select">
+                                    <option value="10" selected>10</option>
+                                    <option value="20">20</option>
+                                    <option value="40">40</option>
+                                    <option value="60">60</option>
+                                </select>
+                                <button id="viewToggleBtn" class="secondary" type="button" aria-label="Switch to list view"
+                                    title="Switch to list view">
+                                    <img src="/static/images/list.svg" alt="" class="icon" aria-hidden="true" />
+                                </button>
+                                <button id="refreshBtn" class="secondary" type="button" title="Refresh list"
+                                    aria-label="Refresh list">
+                                    <img src="/static/images/refresh.svg" alt="" class="icon" aria-hidden="true" />
+                                </button>
+                                <button id="downloadSelBtn" class="secondary" type="button" disabled title="Download selected"
+                                    aria-label="Download selected">
+                                    <img src="/static/images/download.svg" alt="" class="icon" aria-hidden="true" />
+                                </button>
+                            </div>
                         </div>
                     </div>
-                    <div class='card list-card' id='listCard' style='padding:0.75rem 1rem 1.25rem;'>
-                        <div id='epubList' class='epub-list'>
-                            <div class='empty-state'>Loading…</div>
+
+                    <div class="card list-card" id="listCard">
+                        <div id="epubList" class="epub-list"></div>
+                    </div>
+
+                    <div class="card grid-card hidden" id="gridCard">
+                        <div id="epubGrid" class="epub-grid"></div>
+                    </div>
+                </div>
+
+                <!-- Manga Tab -->
+                <div id="manga-tab" class="tab-panel">
+                    <div class="card fade-in">
+                        <form id="mangaForm">
+                            <div class="flex">
+                                <div class="field url">
+                                    <label for="mangaUrl">Manga URL</label>
+                                    <input type="text" id="mangaUrl" placeholder="https://mangadex.org/title/..." required />
+                                </div>
+                                <div class="field narrow">
+                                    <label for="mangaLang">Language</label>
+                                    <select id="mangaLang">
+                                        <option value="">Any</option>
+                                        <option value="en">English</option>
+                                        <option value="es">Spanish</option>
+                                        <option value="pt-br">Portuguese (BR)</option>
+                                        <option value="it">Italian</option>
+                                        <option value="ru">Russian</option>
+                                        <option value="fr">French</option>
+                                        <option value="de">German</option>
+                                        <option value="ja">Japanese</option>
+                                        <option value="ko">Korean</option>
+                                        <option value="zh">Chinese</option>
+                                    </select>
+                                </div>
+                                <div class="field narrow">
+                                    <label for="mangaLimit">Chapter limit</label>
+                                    <input type="number" id="mangaLimit" min="0" placeholder="All" />
+                                </div>
+                                <div class="field narrow">
+                                    <label for="mangaSplit">Split CBZ every</label>
+                                    <select id="mangaSplit">
+                                        <option value="0">No split</option>
+                                        <option value="10">10 chapters</option>
+                                        <option value="20">20 chapters</option>
+                                        <option value="30">30 chapters</option>
+                                        <option value="50">50 chapters</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="flex buttons">
+                                <button id="mangaGenBtn" class="primary" type="submit">Generate Manga</button>
+                            </div>
+                            <p class="helper-text">Supports MangaDex, Webtoons, Manga18 and more. Download as CBZ or PDF.</p>
+                            <noscript>
+                                <p class="no-js-notice" style="color: #f59e0b; padding: 0.5rem; background: #f59e0b20; border-radius: 6px; margin-top: 0.5rem;">
+                                    ⚠️ JavaScript is disabled. Some features require JavaScript. 
+                                    You can still browse cached manga below and download files directly.
+                                </p>
+                            </noscript>
+                        </form>
+                    </div>
+
+                    <div class="card controls-card">
+                        <div class="actions control-toolbar">
+                            <div class="field search">
+                                <input type="text" id="mangaSearchInput" placeholder="Filter manga by title or author" />
+                            </div>
+                            <div class="actions-right">
+                                <button id="mangaViewToggle" class="secondary js-only" type="button" title="Toggle grid/list view"
+                                    aria-label="Toggle view">
+                                    <img src="/static/images/list.svg" alt="" class="icon" aria-hidden="true" />
+                                </button>
+                                <button id="mangaRefreshBtn" class="secondary js-only" type="button" title="Refresh list"
+                                    aria-label="Refresh list">
+                                    <img src="/static/images/refresh.svg" alt="" class="icon" aria-hidden="true" />
+                                </button>
+                            </div>
                         </div>
                     </div>
-                    <div class='card hidden' id='gridCard' style='padding:1rem 1.05rem 1.15rem;'>
-                        <div id='epubGrid' class='epub-grid'>
-                            <div class='empty-state'>Loading…</div>
-                        </div>
+
+                    <div class="card manga-grid-card">
+                        <div id="mangaGrid" class="manga-grid"></div>
                     </div>
-                </section>
-                <footer class='fade-in' style='animation-delay:.15s;'>Generated UI • API spec at <a class='dl'
-                        href='/docs'>/docs</a></footer>
+
+                    <div class="card manga-list-card hidden">
+                        <div id="mangaList" class="manga-list"></div>
+                    </div>
+                </div>
             </div>
-            <div class='resizer' id='sidebarResizer' title='Drag to resize logs panel'></div>
-            <aside class='sidebar'>
-                <section class='status-wrap fade-in' style='animation-delay:.1s;'>
-                    <div class='card' style='padding:.85rem .9rem 1rem;'>
-                        <div style='display:flex;gap:1rem;flex-wrap:wrap;font-size:.6rem;opacity:.8;margin:0 0 .35rem;'>
-                            <h2 style='font-size:.95rem; font-weight:600; letter-spacing:.5px; margin:0 0 .6rem;'>Status
-                                / Logs
-                            </h2>
-                            <label style='display:flex;align-items:center;gap:.25rem;'><input type='checkbox'
-                                    id='showAccess'> Show access logs</label>
-                            <label style='display:flex;align-items:center;gap:.25rem;'><input type='checkbox'
-                                    id='showPolling'> Show polling logs</label>
+
+            <div class="resizer" id="sidebarResizer" role="separator" aria-orientation="vertical"
+                aria-label="Resize logs panel"></div>
+
+            <aside class="sidebar" aria-label="Activity logs">
+                <div class="card fade-in">
+                    <div class="flex log-header">
+                        <h2 class="log-title">Server logs</h2>
+                        <div class="actions log-filters">
+                            <label class="checkbox-control" title="Show access logs">
+                                <input type="checkbox" id="showAccess" />
+                                <span class="log-filter-label">Access</span>
+                            </label>
+                            <label class="checkbox-control" title="Show polling logs">
+                                <input type="checkbox" id="showPolling" />
+                                <span class="log-filter-label">Polling</span>
+                            </label>
                         </div>
-                        <div class='status-bar' id='logBox'></div>
                     </div>
-                </section>
+                    <div class="status-wrap">
+                        <div class="status-bar" id="logBox"></div>
+                    </div>
+                </div>
             </aside>
         </div>
     </main>
-    <script>
-        const $ = sel => document.querySelector(sel);
-        // Theme toggle
-        const rootEl = document.documentElement;
-        const savedTheme = localStorage.getItem('theme-mode');
-        if (savedTheme === 'light') rootEl.classList.add('light');
-        const themeBtn = document.getElementById('themeToggle');
-        const logsToggle = document.getElementById('logsToggle');
-        const resizer = document.getElementById('sidebarResizer');
-        function applyTheme() {
-            if (rootEl.classList.contains('light')) {
-                localStorage.setItem('theme-mode', 'light');
-                themeBtn.textContent = '🌙 Dark';
-            } else {
-                localStorage.setItem('theme-mode', 'dark');
-                themeBtn.textContent = '🌞 Light';
-            }
-        }
-        applyTheme();
-        // Ensure sidebar fills the full viewport height beneath the sticky header
-        function updateHeaderHeight() {
-            const headerEl = document.querySelector('header');
-            if (!headerEl) return;
-            const h = Math.round(headerEl.getBoundingClientRect().height);
-            document.documentElement.style.setProperty('--header-height', h + 'px');
-        }
-        updateHeaderHeight();
-        window.addEventListener('resize', updateHeaderHeight);
-        // Logs sidebar toggle with persistence
-        function applyLogsCollapsed(collapsed) {
-            if (collapsed) { rootEl.classList.add('logs-collapsed'); } else { rootEl.classList.remove('logs-collapsed'); }
-            localStorage.setItem('logs-collapsed', collapsed ? '1' : '0');
-        }
-        const savedLogsState = localStorage.getItem('logs-collapsed');
-        const defaultCollapse = window.matchMedia && window.matchMedia('(max-width: 980px)').matches;
-        applyLogsCollapsed(savedLogsState === null ? defaultCollapse : savedLogsState === '1');
-        logsToggle.addEventListener('click', () => {
-            const nowCollapsed = !rootEl.classList.contains('logs-collapsed');
-            applyLogsCollapsed(nowCollapsed);
-        });
-        // Sidebar resizing (drag)
-        function setSidebarWidth(px) {
-            const min = 260; const max = Math.max(min, Math.floor(window.innerWidth * 0.6));
-            const clamped = Math.max(min, Math.min(max, px));
-            document.documentElement.style.setProperty('--sidebar-width', clamped + 'px');
-            localStorage.setItem('logs-sidebar-width', String(clamped));
-        }
-        // Initialize width from storage if present
-        const savedWidth = parseInt(localStorage.getItem('logs-sidebar-width') || '0', 10);
-        if (savedWidth > 0) document.documentElement.style.setProperty('--sidebar-width', savedWidth + 'px');
-        let dragging = false; let startX = 0; let startWidth = 0;
-        function onMove(e) {
-            if (!dragging) return;
-            const clientX = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
-            const layoutRect = document.querySelector('.layout').getBoundingClientRect();
-            const contentRightX = layoutRect.right - startWidth; // initial divider position
-            const delta = clientX - contentRightX;
-            const newWidth = startWidth - delta;
-            setSidebarWidth(newWidth);
-        }
-        function onUp() { dragging = false; document.body.classList.remove('resizing'); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp); }
-        function onDown(e) { if (rootEl.classList.contains('logs-collapsed')) return; dragging = true; document.body.classList.add('resizing'); startX = (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX); startWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 380; window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp); window.addEventListener('touchmove', onMove, { passive: false }); window.addEventListener('touchend', onUp); e.preventDefault(); }
-        resizer.addEventListener('mousedown', onDown);
-        resizer.addEventListener('touchstart', onDown, { passive: false });
-        themeBtn.addEventListener('click', () => { rootEl.classList.toggle('light'); applyTheme(); });
-        const logBox = $('#logBox');
-        let logSeq = 0;
-        const epubList = $('#epubList');
-        const epubGrid = $('#epubGrid');
-        const listCard = $('#listCard');
-        const gridCard = $('#gridCard');
-        const selectAll = $('#selectAll');
-        const searchInput = $('#searchInput');
-        const downloadSelBtn = $('#downloadSelBtn');
-        const deleteSelBtn = $('#deleteSelBtn');
-        const downloadAllBtn = $('#downloadAllBtn');
-        const deleteAllBtn = $('#deleteAllBtn');
-        const refreshBtn = $('#refreshBtn');
-        const viewToggleBtn = $('#viewToggleBtn');
 
-        const viewStateKey = 'epub-view-mode';
-        let viewMode = localStorage.getItem(viewStateKey);
-        if (viewMode !== 'list' && viewMode !== 'grid') viewMode = 'grid';
-        const expandedStateKey = 'epub-expanded-novels';
-        const expandedNovels = new Set();
-        try {
-            const storedExpanded = JSON.parse(localStorage.getItem(expandedStateKey) || '[]');
-            if (Array.isArray(storedExpanded)) storedExpanded.forEach(key => expandedNovels.add(key));
-        } catch (_err) { /* ignore corrupted storage */ }
-        const searchStateKey = 'epub-search-query';
-        let currentSearch = '';
-        if (searchInput) {
-            const savedQuery = localStorage.getItem(searchStateKey) || '';
-            if (savedQuery) {
-                currentSearch = savedQuery;
-                searchInput.value = savedQuery;
-            }
-        }
+    <footer>
+        Built with ❤️ to keep your EPUB archive tidy.
+    </footer>
 
-        function escapeDatasetValue(value) {
-            const strValue = String(value);
-            if (window.CSS && typeof CSS.escape === 'function') {
-                return CSS.escape(strValue);
-            }
-            return strValue.replace(/[^a-zA-Z0-9\-_.:]/g, '\\$&');
-        }
-
-        function escapeHtml(value) {
-            return String(value ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
-
-        function truncate(text, maxLength = 220) {
-            if (!text) return '';
-            const str = String(text);
-            return str.length > maxLength ? str.slice(0, maxLength - 1) + '…' : str;
-        }
-
-        function formatDate(iso) {
-            if (!iso) return '—';
-            const dt = new Date(iso);
-            if (Number.isNaN(dt.getTime())) return '—';
-            return dt.toLocaleString();
-        }
-
-        function formatSize(bytes) {
-            if (bytes == null) return '—';
-            if (bytes < 1024) return `${bytes} B`;
-            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-            return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
-        }
-
-        function persistExpanded() {
-            try {
-                localStorage.setItem(expandedStateKey, JSON.stringify([...expandedNovels]));
-            } catch (_err) {
-                /* ignore storage errors */
-            }
-        }
-
-        function refreshNovelCheckboxes() {
-            document.querySelectorAll('.novel-card').forEach(card => {
-                const novelBox = card.querySelector('input.sel-novel');
-                if (!novelBox) return;
-                const fileBoxes = card.querySelectorAll('input.sel-file');
-                if (!fileBoxes.length) {
-                    novelBox.indeterminate = false;
-                    novelBox.checked = false;
-                    return;
-                }
-                const allChecked = [...fileBoxes].every(cb => cb.checked);
-                const someChecked = [...fileBoxes].some(cb => cb.checked);
-                novelBox.checked = allChecked;
-                novelBox.indeterminate = someChecked && !allChecked;
+    <!-- ES Module for modern browsers -->
+    <script type="module" src="/static/js/main.js"></script>
+    
+    <!-- Fallback for browsers without ES module support (Opera Mobile, etc.) -->
+    <script nomodule>
+        // Basic functionality for browsers without ES module support
+        document.addEventListener('DOMContentLoaded', function() {
+            // Tab switching
+            var tabBtns = document.querySelectorAll('.tab-btn');
+            var tabPanels = document.querySelectorAll('.tab-panel');
+            
+            tabBtns.forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var target = btn.dataset.tab;
+                    tabBtns.forEach(function(b) { b.classList.remove('active'); });
+                    tabPanels.forEach(function(p) { p.classList.remove('active'); });
+                    btn.classList.add('active');
+                    document.getElementById(target).classList.add('active');
+                });
             });
-        }
-
-        function refreshSelectAllControl() {
-            if (!selectAll) return;
-            const fileBoxes = [...document.querySelectorAll('input.sel-file')];
-            if (!fileBoxes.length) {
-                selectAll.checked = false;
-                selectAll.indeterminate = false;
-                return;
+            
+            // Theme toggle
+            var themeBtn = document.getElementById('themeToggle');
+            if (themeBtn) {
+                themeBtn.addEventListener('click', function() {
+                    document.documentElement.classList.toggle('light');
+                });
             }
-            const allChecked = fileBoxes.every(cb => cb.checked);
-            const someChecked = fileBoxes.some(cb => cb.checked);
-            selectAll.checked = allChecked;
-            selectAll.indeterminate = someChecked && !allChecked;
-        }
-
-        function selectedNames() {
-            const set = new Set();
-            document.querySelectorAll('input.sel-file:checked').forEach(cb => {
-                if (cb.dataset.name) set.add(cb.dataset.name);
-            });
-            return [...set];
-        }
-
-        function updateSelectionState() {
-            const anySelected = selectedNames().length > 0;
-            downloadSelBtn.disabled = !anySelected;
-            deleteSelBtn.disabled = !anySelected;
-            refreshNovelCheckboxes();
-            refreshSelectAllControl();
-        }
-
-        function setViewMode(mode, { skipSave = false } = {}) {
-            viewMode = mode === 'grid' ? 'grid' : 'list';
-            if (viewMode === 'grid') {
-                listCard.classList.add('hidden');
-                gridCard.classList.remove('hidden');
-                if (viewToggleBtn) viewToggleBtn.textContent = 'List View';
-            } else {
-                gridCard.classList.add('hidden');
-                listCard.classList.remove('hidden');
-                if (viewToggleBtn) viewToggleBtn.textContent = 'Grid View';
-            }
-            if (!skipSave) localStorage.setItem(viewStateKey, viewMode);
-            updateSelectionState();
-        }
-
-        if (viewToggleBtn) {
-            viewToggleBtn.addEventListener('click', e => {
-                e.preventDefault();
-                setViewMode(viewMode === 'list' ? 'grid' : 'list');
-            });
-        }
-
-        const showAccessCb = document.getElementById('showAccess');
-        const showPollingCb = document.getElementById('showPolling');
-        showAccessCb.checked = false; // default hide access
-        showPollingCb.checked = false; // default hide polling
-
-        function classify(line) {
-            // Access log heuristic (Uvicorn default format starting with IP and method)
-            if (/\bGET \/logs\?since=/i.test(line)) return 'polling';
-            if (/(GET|POST|DELETE|PUT|HEAD) \/[^ ]* HTTP\//.test(line)) return 'access';
-            if (/error|traceback/i.test(line)) return 'error';
-            if (/warn/i.test(line)) return 'warn';
-            return 'info';
-        }
-
-        function log(msg, type = 'info', rawTypeHint = null) {
-            const effectiveType = rawTypeHint || classify(msg);
-            if (effectiveType === 'access' && !showAccessCb.checked) return;
-            if (effectiveType === 'polling' && !showPollingCb.checked) return;
-            const ts = new Date().toISOString().split('T')[1].replace('Z', '');
-            const span = document.createElement('div');
-            const level = (effectiveType === 'error' ? 'err' : (effectiveType === 'warn' ? 'warn' : 'info'));
-            span.className = 'log-' + level;
-            span.textContent = `[${ts}] ${msg}`;
-            logBox.appendChild(span);
-            // Keep only last ~1200 nodes
-            while (logBox.childNodes.length > 1200) logBox.removeChild(logBox.firstChild);
-            logBox.scrollTop = logBox.scrollHeight;
-        }
-
-        showAccessCb.addEventListener('change', () => { });
-        showPollingCb.addEventListener('change', () => { });
-
-        let ws;
-        let wsActive = false;
-        function initWebSocket() {
-            try {
-                const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-                ws = new WebSocket(`${proto}://${location.host}/ws/logs`);
-                ws.onopen = () => { wsActive = true; log('WebSocket log stream connected'); };
-                ws.onclose = () => { wsActive = false; log('WebSocket closed; falling back to polling', 'warn'); setTimeout(() => { if (!wsActive) initWebSocket(); }, 4000); };
-                ws.onerror = () => { /* errors handled by close */ };
-                ws.onmessage = (evt) => {
-                    try {
-                        const data = JSON.parse(evt.data);
-                        if (Array.isArray(data.lines)) {
-                            for (const obj of data.lines) { logSeq = Math.max(logSeq, obj.seq); log(obj.line); }
-                        } else if (data.seq && data.line) { logSeq = Math.max(logSeq, data.seq); log(data.line); }
-                    } catch (e) { /* ignore malformed */ }
-                };
-            } catch (e) { log('WebSocket init failed: ' + e.message, 'warn'); }
-        }
-        initWebSocket();
-
-        async function pollLogs() {
-            if (wsActive) { setTimeout(pollLogs, 5000); return; }
-            try {
-                const r = await fetch(`/logs?since=${logSeq}`);
-                if (r.ok) {
-                    const j = await r.json();
-                    if (j.ok && j.data && j.data.lines) {
-                        for (const { seq, line } of j.data.lines) {
-                            logSeq = Math.max(logSeq, seq);
-                            log(line);
+            
+            // Load manga list (basic version)
+            function loadManga() {
+                var grid = document.getElementById('mangaGrid');
+                if (!grid) return;
+                
+                fetch('/manga?offset=0&limit=50')
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (!data.ok || !data.data || !data.data.items) {
+                            grid.innerHTML = '<p>Failed to load manga</p>';
+                            return;
                         }
-                        if (j.data.next) logSeq = j.data.next;
-                    }
-                }
-            } catch (_e) { /* silent */ }
-            finally { setTimeout(pollLogs, 1000); }
-        }
-
-        async function fetchJSON(url, opts = {}) {
-            const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
-            if (!r.ok) {
-                let txt = await r.text();
-                throw new Error(`HTTP ${r.status}: ${txt}`);
-            }
-            return r.json();
-        }
-
-        function syncCheckboxes(source) {
-            const name = source.dataset.name;
-            if (!name) return;
-            const selector = `input.sel-file[data-name="${escapeDatasetValue(name)}"]`;
-            document.querySelectorAll(selector).forEach(cb => {
-                if (cb === source) return;
-                if (cb.disabled) return;
-                cb.checked = source.checked;
-            });
-        }
-
-        let currentPage = 1;
-        async function loadList(page = 1, { preserveExpansion = true } = {}) {
-            try {
-                const previouslySelected = new Set(selectedNames());
-                const pageSize = parseInt($('#pageSize').value) || 20;
-                const offset = (page - 1) * pageSize;
-                const params = new URLSearchParams({ offset, limit: pageSize });
-                if (currentSearch) params.set('search', currentSearch);
-                const data = await fetchJSON(`/epubs/details?${params.toString()}`);
-                const items = (data.data && data.data.items) || [];
-                const total = (data.data && data.data.total) || items.length;
-
-                if (preserveExpansion) {
-                    try {
-                        const storedExpanded = JSON.parse(localStorage.getItem(expandedStateKey) || '[]');
-                        expandedNovels.clear();
-                        if (Array.isArray(storedExpanded)) storedExpanded.forEach(key => expandedNovels.add(key));
-                    } catch (_err) {
-                        expandedNovels.clear();
-                    }
-                }
-
-                // Render list (novel cards)
-                if (!items.length) {
-                    epubList.innerHTML = `<div class='empty-state'>No EPUBs found.</div>`;
-                } else {
-                    epubList.innerHTML = items.map(item => {
-                        const key = item.novel_key || '';
-                        const safeKey = escapeHtml(key);
-                        const baseTitle = item.title || key || 'Untitled';
-                        const title = escapeHtml(baseTitle);
-                        const safeAlt = escapeHtml(`${baseTitle} cover`);
-                        const fallbackInitial = escapeHtml(baseTitle.trim().charAt(0).toUpperCase() || '#');
-                        const author = item.author ? `<p class='author'>${escapeHtml(item.author)}</p>` : '';
-                        const description = item.description ? `<p class='description'>${escapeHtml(truncate(item.description, 320))}</p>` : '';
-                        const cover = item.cover_image
-                            ? `<div class='cover-frame'><img class='cover-img' src='${escapeHtml(item.cover_image)}' alt='${safeAlt}' loading='lazy' decoding='async' width='240' height='320'></div>`
-                            : `<div class='cover-frame placeholder' role='img' aria-label='No cover available'>${fallbackInitial}</div>`;
-                        const latest = formatDate(item.latest_created);
-                        const fileCount = item.file_count || 0;
-                        const isExpanded = expandedNovels.has(key);
-                        const filesHtml = (item.files || []).map(file => {
-                            const fileName = escapeHtml(file.file_name || '');
-                            const size = formatSize(file.file_size);
-                            const created = formatDate(file.created_at);
-                            const downloadUrl = file.download_url || file.api_download_url || `/epub/download?name=${encodeURIComponent(file.file_name || '')}`;
-                            const directLink = escapeHtml(downloadUrl);
-                            return `<div class='file-row'>
-                                <div class='file-top'>
-                                    <label><input type='checkbox' class='sel-file' data-name='${fileName}'></label>
-                                    <strong title='${fileName}'>${fileName}</strong>
-                                </div>
-                                <div class='file-meta'>
-                                    <span>${size}</span>
-                                    <span>Updated: ${created}</span>
-                                </div>
-                                <div class='file-actions'>
-                                    <button class='secondary download-file-btn' data-name='${fileName}'>Download</button>
-                                    <a class='dl' href='${directLink}' target='_blank' rel='noopener'>Direct link</a>
-                                </div>
-                            </div>`;
+                        
+                        var items = data.data.items;
+                        if (items.length === 0) {
+                            grid.innerHTML = '<p>No manga found. Add one using the form above!</p>';
+                            return;
+                        }
+                        
+                        var html = items.map(function(m) {
+                            var key = m.manga_key || '';
+                            var title = m.title || 'Unknown';
+                            var author = m.author || '';
+                            var chapters = m.chapter_count || 0;
+                            var cover = m.cover_image || '';
+                            
+                            return '<div class="manga-card" style="display:inline-block;width:200px;margin:0.5rem;vertical-align:top;background:var(--panel);border-radius:8px;overflow:hidden;">' +
+                                (cover ? '<img src="' + cover + '" alt="" style="width:100%;height:150px;object-fit:cover;">' : '<div style="height:150px;background:var(--bg-accent);display:flex;align-items:center;justify-content:center;font-size:3rem;">📚</div>') +
+                                '<div style="padding:0.75rem;">' +
+                                '<h3 style="font-size:0.9rem;margin:0 0 0.5rem;">' + title + '</h3>' +
+                                '<p style="font-size:0.75rem;color:var(--text-dim);margin:0 0 0.5rem;">' + author + '</p>' +
+                                '<p style="font-size:0.7rem;color:var(--text-dim);margin:0 0 0.75rem;">📖 ' + chapters + ' chapters</p>' +
+                                '<div style="display:flex;gap:0.25rem;flex-wrap:wrap;">' +
+                                '<a href="/manga/' + key + '/download/cbz" class="btn-small primary" style="text-decoration:none;padding:0.4rem 0.6rem;font-size:0.65rem;background:var(--accent);color:#fff;border-radius:4px;">📦 CBZ</a>' +
+                                '<a href="/manga/' + key + '/download/pdf" class="btn-small secondary" style="text-decoration:none;padding:0.4rem 0.6rem;font-size:0.65rem;background:transparent;border:1px solid var(--border);color:var(--text);border-radius:4px;">📄 PDF</a>' +
+                                '</div></div></div>';
                         }).join('');
-
-                        const expandedClass = isExpanded ? 'open' : '';
-                        const expandLabel = isExpanded ? 'Hide files' : `Show files (${fileCount})`;
-                        const newestFileName = item.files && item.files.length ? item.files[0].file_name || '' : '';
-                        const safeNewestFileName = escapeHtml(newestFileName);
-                        return `<article class='novel-card' data-novel='${safeKey}'>
-                            <label class='select-box'>
-                                <input type='checkbox' class='sel-novel' data-novel='${safeKey}'>
-                                <span>${fileCount}</span>
-                            </label>
-                            <div class='novel-header'>
-                                ${cover}
-                                <div class='meta'>
-                                    <h3>${title}</h3>
-                                    ${author}
-                                    ${description}
-                                    <div class='quick-meta'>
-                                        <span>Files: ${fileCount}</span>
-                                        <span>Latest: ${latest}</span>
-                                    </div>
-                                    <div class='novel-actions'>
-                                        <button class='toggle-files' data-novel='${safeKey}'>${expandLabel}</button>
-                                        <button class='secondary download-latest-btn' data-name='${safeNewestFileName}' ${item.files && item.files.length ? '' : 'disabled'}>Download newest</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class='files-wrapper ${expandedClass}'>
-                                <div class='files-list'>
-                                    ${filesHtml || `<div class='empty-state'>No files yet.</div>`}
-                                </div>
-                            </div>
-                        </article>`;
-                    }).join('');
-                }
-
-                // Render grid view (flatten files similar to previous but grouped by novel)
-                if (!items.length) {
-                    epubGrid.innerHTML = `<div class='empty-state'>No EPUBs found.</div>`;
-                } else {
-                    epubGrid.innerHTML = items.map(item => {
-                        const key = item.novel_key || '';
-                        const safeKey = escapeHtml(key);
-                        const baseTitle = item.title || key || 'Untitled';
-                        const title = escapeHtml(baseTitle);
-                        const safeAlt = escapeHtml(`${baseTitle} cover`);
-                        const fallbackInitial = escapeHtml(baseTitle.trim().charAt(0).toUpperCase() || '#');
-                        const author = item.author ? `<p class='author'>${escapeHtml(item.author)}</p>` : '';
-                        const description = item.description ? `<p class='desc'>${escapeHtml(truncate(item.description, 200))}</p>` : '';
-                        const cover = item.cover_image
-                            ? `<img class='cover-img' src='${escapeHtml(item.cover_image)}' alt='${safeAlt}' loading='lazy' decoding='async' width='360' height='480'>`
-                            : `<div class='cover-placeholder' role='img' aria-label='No cover available'>${fallbackInitial}</div>`;
-                        const latest = formatDate(item.latest_created);
-                        const fileCount = item.file_count || 0;
-                        const latestFile = item.files && item.files.length ? item.files[0] : null;
-                        const latestSize = latestFile ? formatSize(latestFile.file_size) : '—';
-                        const latestFileName = latestFile && latestFile.file_name ? latestFile.file_name : '';
-                        const safeLatestFileName = escapeHtml(latestFileName);
-                        const latestDownloadUrlRaw = latestFile ? (latestFile.download_url || latestFile.api_download_url || `/epub/download?name=${encodeURIComponent(latestFile.file_name)}`) : '';
-                        const directLink = latestDownloadUrlRaw ? escapeHtml(latestDownloadUrlRaw) : '#';
-                        const selectAttrs = latestFileName ? `data-name='${safeLatestFileName}'` : 'disabled';
-                        const downloadControls = latestFile
-                            ? `<button class='secondary download-file-btn' data-name='${safeLatestFileName}'>Download</button><a class='dl' href='${directLink}' target='_blank' rel='noopener'>Direct link</a>`
-                            : `<span class='no-files'>No files</span>`;
-                        return `<article class='epub-card' data-novel='${safeKey}'>
-                            <label class='select-box'><input type='checkbox' class='sel-novel sel-file' data-novel='${safeKey}' ${selectAttrs}><span>${fileCount}</span></label>
-                            <div class='cover-wrap'>
-                                ${cover}
-                                <span class='size-badge'>${latestSize}</span>
-                            </div>
-                            <div class='card-body'>
-                                <h3 title='${title}'>${title}</h3>
-                                ${author}
-                                ${description}
-                                <div class='meta-line'>
-                                    <span>Files: ${fileCount}</span>
-                                    <span>Latest: ${latest}</span>
-                                </div>
-                                <div class='card-actions'>
-                                    ${downloadControls}
-                                </div>
-                            </div>
-                        </article>`;
-                    }).join('');
-                }
-
-                // Restore expansion state and selection
-                document.querySelectorAll('.novel-card').forEach(card => {
-                    const key = card.dataset.novel || '';
-                    const toggle = card.querySelector('.toggle-files');
-                    const wrapper = card.querySelector('.files-wrapper');
-                    const novelCheckbox = card.querySelector('input.sel-novel');
-                    if (toggle && wrapper) {
-                        toggle.addEventListener('click', e => {
-                            e.preventDefault();
-                            const nowOpen = !wrapper.classList.contains('open');
-                            if (nowOpen) {
-                                wrapper.classList.add('open');
-                                if (key) expandedNovels.add(key);
-                            } else {
-                                wrapper.classList.remove('open');
-                                if (key) expandedNovels.delete(key);
-                            }
-                            if (key) persistExpanded();
-                        });
-                        if (key && expandedNovels.has(key)) wrapper.classList.add('open');
-                        else wrapper.classList.remove('open');
-                    }
-
-                    if (novelCheckbox) {
-                        novelCheckbox.addEventListener('change', () => {
-                            const checked = novelCheckbox.checked;
-                            card.querySelectorAll('input.sel-file').forEach(cb => {
-                                if (cb.disabled) return;
-                                cb.checked = checked;
-                                syncCheckboxes(cb);
-                            });
-                            updateSelectionState();
-                        });
-                    }
-
-                    card.querySelectorAll('input.sel-file').forEach(cb => {
-                        if (previouslySelected.has(cb.dataset.name)) {
-                            cb.checked = true;
-                        }
-                        if (cb.checked) syncCheckboxes(cb);
-                        cb.addEventListener('change', () => {
-                            syncCheckboxes(cb);
-                            updateSelectionState();
-                        });
+                        
+                        grid.innerHTML = html;
+                    })
+                    .catch(function(err) {
+                        grid.innerHTML = '<p>Error loading manga: ' + err.message + '</p>';
                     });
-
-                    card.querySelectorAll('.download-file-btn').forEach(btn => {
-                        btn.addEventListener('click', e => {
-                            e.preventDefault();
-                            const name = btn.dataset.name;
-                            if (name) downloadOne(name);
-                        });
-                    });
-
-                    const downloadLatestBtn = card.querySelector('.download-latest-btn');
-                    if (downloadLatestBtn && downloadLatestBtn.dataset.name) {
-                        downloadLatestBtn.addEventListener('click', e => {
-                            e.preventDefault();
-                            const name = downloadLatestBtn.dataset.name;
-                            if (name) downloadOne(name);
-                        });
-                    }
-                });
-
-                document.querySelectorAll('.epub-card input.sel-file').forEach(cb => {
-                    if (previouslySelected.has(cb.dataset.name)) {
-                        cb.checked = true;
-                    }
-                    if (cb.checked) syncCheckboxes(cb);
-                    cb.addEventListener('change', () => {
-                        syncCheckboxes(cb);
-                        updateSelectionState();
-                    });
-                });
-
-                // Pagination controls
-                const pager = $('#pager');
-                const pages = Math.max(1, Math.ceil(total / pageSize));
-                currentPage = Math.min(page, pages);
-                const btn = (p, label = undefined) => `<button class='secondary' data-page='${p}' ${p === currentPage ? 'disabled' : ''}>${label || p}</button>`;
-                let html = '';
-                if (pages > 1) {
-                    html += btn(Math.max(1, currentPage - 1), '‹');
-                    const windowSize = 5;
-                    let start = Math.max(1, currentPage - 2); let end = Math.min(pages, start + windowSize - 1); if (end - start < windowSize - 1) start = Math.max(1, end - windowSize + 1);
-                    if (start > 1) html += btn(1, '1') + (start > 2 ? '<span style="opacity:.5;">…</span>' : '');
-                    for (let p = start; p <= end; p++) html += btn(p);
-                    if (end < pages) html += (end < pages - 1 ? '<span style="opacity:.5;">…</span>' : '') + btn(pages, String(pages));
-                    html += btn(Math.min(pages, currentPage + 1), '›');
-                }
-                pager.innerHTML = html;
-                pager.querySelectorAll('button[data-page]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); loadList(parseInt(b.dataset.page)); }));
-                updateSelectionState();
-                setViewMode(viewMode, { skipSave: true });
-            } catch (e) { log('List error: ' + e.message, 'error'); }
-        }
-
-        async function generate(e) {
-            e.preventDefault();
-            const btn = $('#genBtn');
-            const cancelBtn = $('#cancelBtn');
-            const stopBtn = $('#stopBtn');
-            const originalHTML = btn.innerHTML;
-            btn.disabled = true;
-            btn.innerHTML = `<span class='spinner'></span> Generating...`;
-            cancelBtn.disabled = false;
-            stopBtn.disabled = true; // enable after chapters fetch begins
-            log('Starting generation...');
-            try {
-                const payload = {
-                    url: $('#url').value.trim(),
-                    chapters_per_book: parseInt($('#chapters_per_book').value) || 500,
-                    chapter_workers: parseInt($('#chapter_workers').value) || 0,
-                    chapter_limit: parseInt($('#chapter_limit').value) || 0,
-                    start_chapter: parseInt($('#start_chapter').value) || 1
-                };
-                // kick off generation
-                stopBtn.disabled = false;
-                const res = await fetchJSON('/epub/generate', { method: 'POST', body: JSON.stringify(payload) });
-                log('Generation complete. Files: ' + (res.data && res.data.filenames ? res.data.filenames.join(', ') : 'n/a'));
-                if (res.data) {
-                    if (res.data.log_lines) {
-                        for (const line of res.data.log_lines) log(line);
-                    } else if (res.data.summary) {
-                        log('--- Chapter Summary ---');
-                        for (const line of res.data.summary) log(line);
-                    }
-                }
-                await loadList();
-            } catch (e) {
-                if (/cancel/i.test(e.message)) {
-                    log('Generation cancelled by user.', 'warn');
-                } else {
-                    log('Generation failed: ' + e.message, 'error');
-                }
             }
-            finally { btn.disabled = false; btn.innerHTML = originalHTML; cancelBtn.disabled = true; stopBtn.disabled = true; }
-        }
-
-        document.getElementById('cancelBtn').addEventListener('click', async (e) => {
-            e.preventDefault();
-            try {
-                await fetchJSON('/epub/cancel', { method: 'POST', body: JSON.stringify({}) });
-                log('Cancellation requested...', 'warn');
-                $('#cancelBtn').disabled = true;
-            } catch (err) { log('Cancel failed: ' + err.message, 'error'); }
+            
+            // Load manga on page load
+            loadManga();
+            
+            // Refresh button
+            var refreshBtn = document.getElementById('mangaRefreshBtn');
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', loadManga);
+            }
+            
+            // Simple form handler
+            var form = document.getElementById('mangaForm');
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    var url = document.getElementById('mangaUrl').value;
+                    if (!url) return;
+                    
+                    var btn = document.getElementById('mangaGenBtn');
+                    btn.disabled = true;
+                    btn.textContent = 'Generating...';
+                    
+                    fetch('/manga/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: url })
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.ok) {
+                            alert('Manga generated successfully!');
+                            loadManga();
+                        } else {
+                            alert('Error: ' + (data.error || 'Unknown error'));
+                        }
+                    })
+                    .catch(function(err) {
+                        alert('Error: ' + err.message);
+                    })
+                    .finally(function() {
+                        btn.disabled = false;
+                        btn.textContent = 'Generate Manga';
+                    });
+                });
+            }
         });
-
-        document.getElementById('stopBtn').addEventListener('click', async (e) => {
-            e.preventDefault();
-            try {
-                await fetchJSON('/epub/stop', { method: 'POST', body: JSON.stringify({}) });
-                log('Stop requested — will finish current chapter and build partial EPUB.', 'warn');
-                $('#stopBtn').disabled = true;
-            } catch (err) { log('Stop failed: ' + err.message, 'error'); }
-        });
-
-        async function downloadOne(name) {
-            log('Downloading ' + name + '...');
-            try {
-                const r = await fetch('/epub/download?name=' + encodeURIComponent(name));
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                const blob = await r.blob();
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob); a.download = name; a.click();
-                setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-            } catch (err) { log('Download failed: ' + err.message, 'error'); }
-            return false;
-        }
-
-        async function downloadSelected() {
-            const names = selectedNames(); if (!names.length) return;
-            log('Downloading ' + names.length + ' selected as zip...');
-            try {
-                const r = await fetch('/epubs/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }) });
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                const blob = await r.blob();
-                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'epubs.zip'; a.click();
-                setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-            } catch (err) { log('Multi-download failed: ' + err.message, 'error'); }
-        }
-
-        async function downloadAll() {
-            log('Downloading ALL as zip...');
-            try {
-                const r = await fetch('/epubs/download/all', { method: 'POST' });
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                const blob = await r.blob();
-                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'all_epubs.zip'; a.click();
-                setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-            } catch (err) { log('Download-all failed: ' + err.message, 'error'); }
-        }
-
-        async function deleteSelected() {
-            const names = selectedNames(); if (!names.length) return;
-            if (!confirm('Delete ' + names.length + ' file(s)?')) return;
-            try {
-                const r = await fetch('/epubs', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }) });
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                log('Deleted selected.');
-                await loadList();
-            } catch (err) { log('Delete failed: ' + err.message, 'error'); }
-        }
-        async function deleteAll() {
-            if (!confirm('Delete ALL EPUB files?')) return;
-            try {
-                const r = await fetch('/epubs/all', { method: 'DELETE' });
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                log('Deleted all EPUBs.');
-                await loadList();
-            } catch (err) { log('Delete all failed: ' + err.message, 'error'); }
-        }
-
-        document.getElementById('genForm').addEventListener('submit', generate);
-        refreshBtn.addEventListener('click', e => { e.preventDefault(); loadList(currentPage); });
-        document.getElementById('pageSize').addEventListener('change', () => loadList(1));
-        downloadSelBtn.addEventListener('click', e => { e.preventDefault(); downloadSelected(); });
-        downloadAllBtn.addEventListener('click', e => { e.preventDefault(); downloadAll(); });
-        deleteSelBtn.addEventListener('click', e => { e.preventDefault(); deleteSelected(); });
-        deleteAllBtn.addEventListener('click', e => { e.preventDefault(); deleteAll(); });
-        if (selectAll) {
-            selectAll.addEventListener('change', () => {
-                const checked = selectAll.checked;
-                selectAll.indeterminate = false;
-                document.querySelectorAll('input.sel-file').forEach(cb => { cb.checked = checked; });
-                updateSelectionState();
-            });
-        }
-
-        if (searchInput) {
-            searchInput.addEventListener('input', () => {
-                const value = searchInput.value.trim();
-                currentSearch = value;
-                try { localStorage.setItem(searchStateKey, value); } catch (_err) { /* ignore */ }
-                loadList(1, { preserveExpansion: true });
-            });
-        }
-
-        setViewMode(viewMode, { skipSave: true });
-        loadList();
-        pollLogs();
     </script>
 </body>
 

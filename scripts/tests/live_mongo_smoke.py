@@ -21,6 +21,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
+from bson import ObjectId
+
 from scripts.db import operations
 from scripts.db.mongo import db
 
@@ -48,16 +50,21 @@ def _ensure_sample_assets() -> None:
 
 
 def _collect_documents() -> Dict[str, Any]:
-    return {
-        "novel": db.novels.find_one({"novel_key": SAMPLE_NOVEL_KEY}),
-        "links": list(db.novel_links.find({"novel_key": SAMPLE_NOVEL_KEY})),
-        "files": list(db.novel_files.find({"link_key": {"$regex": SAMPLE_NOVEL_KEY}})),
-    }
+    novel_doc = db.novels.find_one({"novel_key": SAMPLE_NOVEL_KEY})
+    if not novel_doc:
+        return {"novel": None, "links": []}
+    novel_id: ObjectId = novel_doc.get("_id")
+    links = list(db.novel_links.find({"novel_id": novel_id}))
+    if not links:
+        # legacy fallback for partially migrated datasets
+        links = list(db.novel_links.find({"novel_key": SAMPLE_NOVEL_KEY}))
+    return {"novel": novel_doc, "links": links}
 
 
 def _cleanup() -> None:
-    db.novel_files.delete_many({"link_key": {"$regex": SAMPLE_NOVEL_KEY}})
-    db.novel_files.delete_many({"novel_key": SAMPLE_NOVEL_KEY})
+    existing = db.novels.find_one({"novel_key": SAMPLE_NOVEL_KEY}, {"_id": 1})
+    if existing and existing.get("_id"):
+        db.novel_links.delete_many({"novel_id": existing["_id"]})
     db.novel_links.delete_many({"novel_key": SAMPLE_NOVEL_KEY})
     db.novels.delete_many({"novel_key": SAMPLE_NOVEL_KEY})
 
@@ -82,7 +89,6 @@ def main() -> None:
     docs = _collect_documents()
     assert docs["novel"], "Novel document missing"
     assert docs["links"], "Novel link document missing"
-    assert docs["files"], "Novel file document missing"
 
     novel_doc = docs["novel"]
     cover_image = novel_doc.get("cover_image")
@@ -95,11 +101,15 @@ def main() -> None:
     if storage_key:
         assert mime, "Cover image MIME type required when storage key is set"
 
-    file_doc = docs["files"][0]
-    assert file_doc.get("novel_key") == SAMPLE_NOVEL_KEY, "Novel key not stored on file"
-    assert file_doc.get("file_data"), "Stored EPUB binary missing"
-    expected_size = (BOOKS_DIR / SAMPLE_FILE_NAME).stat().st_size
-    assert len(file_doc["file_data"]) == expected_size, "Stored EPUB size mismatch"
+    link_doc = docs["links"][0]
+    assert link_doc.get("novel_id") == novel_doc.get("_id"), "Novel ID not stored on link"
+    assert "file_data" not in link_doc, "Binary EPUB data should not be stored"
+    expected_size = (BOOKS_DIR / str(novel_doc["_id"]) / SAMPLE_FILE_NAME).stat().st_size
+    assert link_doc.get("file_size") == expected_size, "Stored EPUB size mismatch"
+
+    download_links = link_doc.get("download_links") or []
+    assert isinstance(download_links, list), "Download links should be stored on the file document"
+    assert any(link.startswith("/epub/download") for link in download_links), "API download link missing from download links"
 
     print("Mongo smoke test inserted documents:")
     print({k: len(v) if isinstance(v, list) else 1 for k, v in docs.items()})

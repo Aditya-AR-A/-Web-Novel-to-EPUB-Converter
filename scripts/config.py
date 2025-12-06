@@ -35,4 +35,30 @@ def _resolve_books_dir() -> Path:
 
 
 BOOKS_DIR: Final[Path] = _resolve_books_dir()
-METADATA_FILENAME: Final[str] = "metadata.json"
+
+
+def _resolve_manga_dir() -> Path:
+    """Determine a writable directory for manga assets."""
+
+    env_value = os.getenv("MANGA_DIR")
+    if env_value:
+        candidate = Path(env_value).expanduser().resolve()
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+
+    default = ROOT_DIR / "manga"
+    try:
+        default.mkdir(parents=True, exist_ok=True)
+        test_file = default / ".write-test"
+        with test_file.open("w", encoding="utf-8") as handle:
+            handle.write("ok")
+        test_file.unlink(missing_ok=True)
+        return default
+    except OSError:
+        tmp_dir = Path(tempfile.gettempdir()) / "manga-data"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        return tmp_dir
+
+
+MANGA_DIR: Final[Path] = _resolve_manga_dir()
+MANGA_MANIFEST_NAME: Final[str] = "manifest.json"

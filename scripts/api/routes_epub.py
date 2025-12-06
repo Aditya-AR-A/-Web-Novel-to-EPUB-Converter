@@ -25,9 +25,9 @@ def _local_file_candidates(name: str, doc: Optional[dict] = None) -> List[Path]:
     candidates.append(direct)
 
     if doc:
-        local_path = doc.get("local_path")
-        if local_path:
-            candidates.append(Path(local_path))
+        novel_id = doc.get("novel_id")
+        if novel_id:
+            candidates.append(BOOKS_PATH / str(novel_id) / name)
         novel_key = doc.get("novel_key")
         if novel_key:
             candidates.append(BOOKS_PATH / novel_key / name)
@@ -67,9 +67,9 @@ def _resolve_epub_source(name: str) -> tuple[Optional[str], Optional[bytes], str
     if initial_local:
         return initial_local, None, mime_type
 
-    doc = db.novel_files.find_one(
+    doc = db.novel_links.find_one(
         {"file_name": name},
-        {"file_data": 1, "storage_key": 1, "mime_type": 1, "novel_key": 1, "local_path": 1},
+        {"storage_key": 1, "mime_type": 1, "novel_id": 1, "novel_key": 1},
     )
 
     local_path = _existing_local_path(name, doc)
@@ -80,12 +80,6 @@ def _resolve_epub_source(name: str) -> tuple[Optional[str], Optional[bytes], str
         return None, None, mime_type
 
     mime_type = doc.get("mime_type") or mime_type
-    data = doc.get("file_data")
-    if data:
-        if isinstance(data, memoryview):
-            data = data.tobytes()
-        return None, bytes(data), mime_type
-
     storage_key = doc.get("storage_key")
     if storage_key:
         r2_bytes = download_r2_bytes(storage_key)
@@ -193,14 +187,13 @@ def download_all_epubs():
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zipf:
         docs = list(
-            db.novel_files.find(
+            db.novel_links.find(
                 {},
                 {
                     "file_name": 1,
-                    "file_data": 1,
                     "storage_key": 1,
+                    "novel_id": 1,
                     "novel_key": 1,
-                    "local_path": 1,
                 },
             )
         )
@@ -221,12 +214,6 @@ def download_all_epubs():
                 if path:
                     zipf.write(path, arcname=name)
                     continue
-                data = doc.get("file_data")
-                if data:
-                    if isinstance(data, memoryview):
-                        data = data.tobytes()
-                    zipf.writestr(name, data)
-                    continue
                 storage_key = doc.get("storage_key")
                 if storage_key:
                     remote_bytes = download_r2_bytes(storage_key)
@@ -245,21 +232,15 @@ def download_many_epubs(req: DownloadManyRequest):
             if path:
                 zipf.write(path, arcname=name)
                 continue
-            doc = db.novel_files.find_one(
+            doc = db.novel_links.find_one(
                 {"file_name": name},
-                {"file_data": 1, "storage_key": 1, "novel_key": 1, "local_path": 1},
+                {"storage_key": 1, "novel_id": 1, "novel_key": 1},
             )
             if not doc:
                 continue
             path = _existing_local_path(name, doc)
             if path:
                 zipf.write(path, arcname=name)
-                continue
-            data = doc.get("file_data")
-            if data:
-                if isinstance(data, memoryview):
-                    data = data.tobytes()
-                zipf.writestr(name, data)
                 continue
             storage_key = doc.get("storage_key")
             if storage_key:

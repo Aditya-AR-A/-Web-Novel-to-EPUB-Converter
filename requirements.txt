@@ -8,3 +8,5 @@ uvicorn[standard]
 python-multipart
 boto3
 python-dotenv
+pymongo[srv]
+cloudscraper

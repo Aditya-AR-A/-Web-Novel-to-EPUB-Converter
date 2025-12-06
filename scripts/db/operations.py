@@ -1,4 +1,3 @@
-import json
 import os
 import mimetypes
 import shutil
@@ -9,7 +8,7 @@ from typing import List, Optional
 
 from bson import ObjectId
 
-from scripts.db.models import NovelMetadata, NovelLinks, NovelFile
+from scripts.db.models import NovelMetadata, NovelLink
 from scripts.db.mongo import db
 from scripts.storage import (
     r2_enabled,
@@ -18,13 +17,6 @@ from scripts.storage import (
     r2_connection_status,
     r2_object_exists,
 )
-from scripts.config import METADATA_FILENAME
-
-
-def _isoformat(value: Optional[datetime]) -> Optional[str]:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    return None
 
 
 def generate_novel_key(title: str, author: str) -> str:
@@ -33,19 +25,14 @@ def generate_novel_key(title: str, author: str) -> str:
     return key.replace(" ", "_").replace(":", "_")
 
 
-def generate_link_key(novel_key: str, file_name: str) -> str:
-    """Generate a unique key for the link."""
-    return f"{novel_key}_{file_name}"
-
-
 def _guess_mime(path: str, fallback: str) -> str:
     mime_type, _ = mimetypes.guess_type(path)
     return mime_type or fallback
 
 
-def _build_storage_key(folder: str, novel_key: str, filename: str) -> str:
+def _build_storage_key(folder: str, novel_id: ObjectId, filename: str) -> str:
     clean_folder = folder.strip("/")
-    clean_key = novel_key.strip("/")
+    clean_key = str(novel_id).strip("/")
     return f"{clean_folder}/{clean_key}/{filename}".replace("//", "/")
 
 
@@ -149,40 +136,45 @@ def save_scraped_novel_to_db(metadata: dict, produced_files: List[str], books_di
     if set_on_insert:
         update_doc["$setOnInsert"] = set_on_insert
 
-    db.novels.update_one({"novel_key": novel_key}, update_doc, upsert=True)
+    db.novels.update_one({"_id": novel_id}, update_doc, upsert=True)
 
     books_base = Path(books_dir).expanduser().resolve()
     books_base.mkdir(parents=True, exist_ok=True)
-    novel_dir = books_base / novel_key
+    storage_folder = str(novel_id)
+    novel_dir = books_base / storage_folder
     novel_dir.mkdir(parents=True, exist_ok=True)
-
-    file_records: List[dict] = []
+    legacy_dir = books_base / novel_key if novel_key else None
 
     # Save files
     for file_name in produced_files:
-        source_path = books_base / file_name
-        target_path = novel_dir / file_name
+        candidate_paths = [books_base / file_name]
+        if legacy_dir:
+            candidate_paths.append(legacy_dir / file_name)
+        candidate_paths.append(novel_dir / file_name)
 
-        if source_path.exists():
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            if source_path.resolve() != target_path.resolve():
-                if target_path.exists():
-                    target_path.unlink()
-                shutil.move(str(source_path), str(target_path))
-        elif target_path.exists():
-            pass
-        else:
+        source_path: Optional[Path] = None
+        for candidate in candidate_paths:
+            if candidate and candidate.exists():
+                source_path = candidate
+                break
+
+        if source_path is None:
             continue
+
+        target_path = novel_dir / file_name
+        if source_path.resolve() != target_path.resolve():
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            if target_path.exists():
+                target_path.unlink()
+            shutil.move(str(source_path), str(target_path))
 
         file_path = target_path
         file_size = file_path.stat().st_size
-        link_key = generate_link_key(novel_key, file_name)
-
-        # Insert NovelLinks
+        # Upload to remote storage when enabled
         storage_key = None
         public_url = None
         if r2_enabled():
-            storage_key = _build_storage_key("books", novel_key, file_name)
+            storage_key = _build_storage_key("books", novel_id, file_name)
             public_url = upload_file_to_r2(str(file_path), storage_key, content_type='application/epub+zip')
             if not public_url:
                 print(f"[R2] Failed to upload {file_name}; keeping local/Mongo copy only.")
@@ -196,98 +188,60 @@ def save_scraped_novel_to_db(metadata: dict, produced_files: List[str], books_di
         download_links = []
         if public_url:
             download_links.append(public_url)
-        download_links.append(str(file_path))
-
-        link = NovelLinks(
-            novel_key=novel_key,
-            link_key=link_key,
-            file_type='epub',
-            download_links=download_links,
-            note='Generated EPUB'
-        )
-        link_doc = link.model_dump(by_alias=True, exclude_none=True)
-        link_doc.pop('_id', None)
-        db.novel_links.update_one(
-            {"novel_key": novel_key, "link_key": link_key},
-            {"$set": link_doc},
-            upsert=True
-        )
+        download_links.append(f"/epub/download?name={file_name}")
+        download_links = list(dict.fromkeys(download_links))
 
         with open(file_path, 'rb') as f:
-            file_bytes = f.read()
+            checksum = hashlib.md5(f.read()).hexdigest()
 
-        checksum = hashlib.md5(file_bytes).hexdigest()
-
-        existing_file = db.novel_files.find_one(
-            {"link_key": link_key, "file_name": file_name},
+        existing_link = db.novel_links.find_one(
+            {"novel_id": novel_id, "file_name": file_name},
             {"created_at": 1}
         )
 
-        created_at_value = existing_file.get('created_at') if existing_file and existing_file.get('created_at') else datetime.utcnow()
-        file_entry = NovelFile(
-            link_key=link_key,
+        link_key = f"{novel_id}_{file_name}"
+        created_at_value = existing_link.get('created_at') if existing_link and existing_link.get('created_at') else datetime.utcnow()
+        updated_at_value = datetime.utcnow()
+        link_entry = NovelLink(
+            novel_id=novel_id,
             novel_key=novel_key,
+            link_key=link_key,
             file_name=file_name,
-            file_url=public_url or str(file_path),
+            file_url=public_url,
             storage_key=storage_key,
             file_size=file_size,
             mime_type='application/epub+zip',
             checksum=checksum,
-            file_data=file_bytes,
-            local_path=str(file_path)
+            download_links=download_links,
+            created_at=created_at_value,
+            updated_at=updated_at_value,
         )
-        file_doc = file_entry.model_dump(by_alias=True, exclude_none=True)
-        file_doc.pop('_id', None)
-        if existing_file and existing_file.get('created_at'):
-            file_doc['created_at'] = existing_file['created_at']
-            created_at_value = existing_file['created_at']
-        db.novel_files.update_one(
-            {"link_key": link_key, "file_name": file_name},
-            {"$set": file_doc},
+
+        link_doc = link_entry.model_dump(by_alias=True, exclude_none=True)
+        link_doc.pop('_id', None)
+
+        set_on_insert: dict[str, object] = {}
+        if not existing_link:
+            set_on_insert["created_at"] = created_at_value
+
+        set_fields = {k: v for k, v in link_doc.items() if k != "created_at"}
+        set_fields["updated_at"] = updated_at_value
+
+        update_ops = {"$set": set_fields}
+        if set_on_insert:
+            update_ops["$setOnInsert"] = set_on_insert
+
+        db.novel_links.update_one(
+            {"novel_id": novel_id, "file_name": file_name},
+            update_ops,
             upsert=True
         )
 
-        file_records.append(
-            {
-                "file_name": file_name,
-                "file_size": file_size,
-                "checksum": checksum,
-                "storage_key": storage_key,
-                "file_url": public_url or str(file_path),
-                "local_path": str(file_path),
-                "mime_type": 'application/epub+zip',
-                "created_at": _isoformat(created_at_value),
-                "download_links": download_links,
-            }
-        )
+        if legacy_dir and legacy_dir.exists() and legacy_dir != novel_dir:
+            try:
+                if not any(legacy_dir.iterdir()):
+                    legacy_dir.rmdir()
+            except OSError:
+                pass
 
-    metadata_payload = {
-        "version": 1,
-        "generated_at": _isoformat(now),
-        "updated_at": _isoformat(now),
-        "novel": {
-            "novel_key": novel_key,
-            "title": novel.title,
-            "author": novel.author,
-            "description": novel.description,
-            "genre": novel.genre,
-            "source_url": novel.source_url,
-            "cover_image": novel.cover_image,
-            "cover_image_storage_key": novel.cover_image_storage_key,
-            "cover_image_mime": novel.cover_image_mime,
-            "status": novel.status,
-            "created_at": _isoformat(novel.created_at),
-            "updated_at": _isoformat(novel.updated_at),
-        },
-        "files": file_records,
-    }
-
-    metadata_bytes = json.dumps(metadata_payload, ensure_ascii=False, indent=2).encode("utf-8")
-    metadata_path = novel_dir / METADATA_FILENAME
-    metadata_path.write_bytes(metadata_bytes)
-
-    if r2_enabled():
-        metadata_storage_key = _build_storage_key("books", novel_key, METADATA_FILENAME)
-        upload_bytes_to_r2(metadata_bytes, metadata_storage_key, content_type="application/json")
-
-    print(f"Saved novel {novel_key} to database with {len(produced_files)} files.")
+    print(f"Saved novel {novel_id} to database with {len(produced_files)} files.")

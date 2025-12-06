@@ -1,8 +1,9 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field
+
 from bson import ObjectId
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------
@@ -14,7 +15,7 @@ class PyObjectId(ObjectId):
         yield cls.validate
 
     @classmethod
-    def validate(cls, v):
+    def validate(cls, v, info=None):
         if not ObjectId.is_valid(v):
             raise ValueError("Invalid ObjectId")
         return ObjectId(v)
@@ -29,7 +30,10 @@ class PyObjectId(ObjectId):
 # ---------------------------------------
 class NovelMetadata(BaseModel):
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
-    novel_key: str = Field(..., description="Primary key for the novel (PK1)")
+    novel_key: Optional[str] = Field(
+        default=None,
+        description="Legacy slug for the novel. Prefer using the Mongo _id for new references.",
+    )
     title: str
     author: Optional[str] = None
     description: Optional[str] = None
@@ -48,41 +52,26 @@ class NovelMetadata(BaseModel):
 
 
 # ---------------------------------------
-# 2️⃣ Novel Links Table (EPUB Variants)
+# 2️⃣ Novel Files Table (Actual Files)
 # ---------------------------------------
-class NovelLinks(BaseModel):
+class NovelLink(BaseModel):
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
-    novel_key: str = Field(..., description="FK from NovelMetadata")
-    link_key: str = Field(..., description="Unique key for this variant (PK2)")
-    file_type: str = Field(default="epub", description="epub / mobi / pdf")
-    part_name: Optional[str] = None
+    novel_id: PyObjectId = Field(..., description="FK to NovelMetadata._id")
+    link_key: str = Field(..., description="Stable identifier for the link, derived from novel_id + file name")
+    file_name: str
+    file_url: Optional[str] = Field(default=None, description="Primary download URL")
+    storage_key: Optional[str] = Field(default=None, description="Object key in remote storage")
+    file_size: Optional[int] = Field(default=None, description="Size of the file in bytes")
+    mime_type: str = Field(default="application/epub+zip")
+    checksum: Optional[str] = None
     download_links: List[str] = Field(default_factory=list)
-    note: Optional[str] = None
+    novel_key: Optional[str] = Field(
+        default=None,
+        description="Legacy slug reference. Prefer novel_id in new code paths.",
+    )
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:
         json_encoders = {ObjectId: str}
         collection_name = "novel_links"
-
-
-# ---------------------------------------
-# 3️⃣ Novel Files Table (Actual Files)
-# ---------------------------------------
-class NovelFile(BaseModel):
-    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
-    link_key: str = Field(..., description="FK from NovelLinks.link_key")
-    novel_key: str = Field(..., description="FK from NovelMetadata.novel_key")
-    file_name: str
-    file_url: str
-    storage_key: Optional[str] = Field(default=None, description="Object key in remote storage")
-    local_path: Optional[str] = Field(default=None, description="Absolute path to local file copy")
-    file_size: int
-    mime_type: str = Field(default="application/epub+zip")
-    checksum: Optional[str] = None  # optional integrity hash
-    file_data: Optional[bytes] = Field(default=None, description="Binary EPUB contents")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-    class Config:
-        json_encoders = {ObjectId: str}
-        collection_name = "novel_files"

@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from .routes_epub import router as epub_router
 from .routes_files import router as files_router
 from .routes_root import router as root_router
+from .routes_manga import router as manga_router
 from .logs import setup_logging, router as logs_router
 
 
@@ -25,6 +26,7 @@ def create_app() -> FastAPI:
     app.include_router(root_router)
     app.include_router(epub_router)
     app.include_router(files_router)
+    app.include_router(manga_router)
     app.include_router(logs_router)
 
     # Logging & websocket broadcaster

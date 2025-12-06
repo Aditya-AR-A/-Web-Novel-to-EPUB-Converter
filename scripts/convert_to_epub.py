@@ -9,23 +9,6 @@ from ebooklib import epub
 from scripts.cancellation import raise_if_cancelled
 from scripts.config import BOOKS_DIR as DEFAULT_BOOKS_DIR
 
-def int_to_roman(input):
-    if not isinstance(input, int):
-        raise TypeError("Expected integer")
-    if not 0 < input < 4000:
-        raise ValueError("Argument must be between 1 and 3999")
-    numerals = [
-        (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
-        (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
-        (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")
-    ]
-    result = ""
-    for value, numeral in numerals:
-        while input >= value:
-            result += numeral
-            input -= value
-    return result
-
 
 def to_epub(metadata, chapter_data, chapters_per_book=500, *, output_dir: str | os.PathLike[str] | None = None):
     # Minimal valid EPUB: only chapters, no custom CSS, no extra pages
@@ -133,8 +116,10 @@ def to_epub(metadata, chapter_data, chapters_per_book=500, *, output_dir: str | 
         book.add_item(epub.EpubNcx())
         book.add_item(epub.EpubNav())
 
-        roman_part = int_to_roman(book_index + 1)
-        filename = metadata.get('title', 'untitled').replace(" ", "_").replace(":", "_").lower() + f"-{roman_part}.epub"
+        start_chapter = start_idx + 1
+        end_chapter = end_idx
+        slug = metadata.get('title', 'untitled').replace(" ", "_").replace(":", "_").lower()
+        filename = f"{slug}-ch-{start_chapter}-{end_chapter}.epub"
 
         target_path = output_base / filename
         target_path.parent.mkdir(parents=True, exist_ok=True)
