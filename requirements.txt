@@ -13,3 +13,4 @@ cloudscraper
 mega.py
 pillow
 tenacity>=8.2.0
+pycryptodome>=3.18.0
