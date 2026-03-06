@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 pinned: false
 license: mit
-short_description: Scrape FreeWebNovel titles and build EPUB volumes via FastAPI.
+short_description: Scrape web novels and build EPUB volumes via FastAPI.
 ---
 
 # 📚 Web Novel to EPUB Converter
