@@ -338,15 +338,8 @@ def list_epubs(
     sliced = records[offset: offset + limit]
     serialized = [_serialize_epub(record) for record in sliced]
     return success({"epubs": serialized, "total": len(records), "offset": offset, "limit": limit})
-
-
-@router.get("/{ebook_id}")
-def get_epub(ebook_id: int, service: EpubService = Depends(get_service)):
-    """Get EPUB metadata from database."""
-    record = service.get_epub(ebook_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Epub not found")
-    return success({"epub": _serialize_epub(record)})
+    # NOTE: GET /{ebook_id} is intentionally placed AFTER all specific routes
+    # (see below, after the download section) to prevent it shadowing /epubs.
 
 
 # ===== Download endpoints =====
@@ -477,12 +470,12 @@ def delete_epub_db(ebook_id: int, service: EpubService = Depends(get_service)):
     return success({"message": "Deleted", "id": ebook_id})
 
 
-@router.delete("/epub")
+@router.delete("/epubs")
 def delete_many_epubs_local(names: List[str]):
-    """Delete multiple EPUBs from local storage."""
+    """Delete multiple EPUBs from local storage (accepts a JSON array of filenames)."""
     settings = get_settings()
     books_dir = settings.local_storage_path
-    
+
     deleted, errors = [], []
     for name in names:
         epub_path = os.path.join(books_dir, name)
@@ -497,15 +490,15 @@ def delete_many_epubs_local(names: List[str]):
     return success({"deleted": deleted, "errors": errors})
 
 
-@router.delete("/epub/all")
+@router.delete("/epubs/all")
 def delete_all_epubs_local():
     """Delete all EPUBs from local storage."""
     settings = get_settings()
     books_dir = settings.local_storage_path
-    
+
     if not os.path.exists(books_dir):
         return success({"deleted": [], "errors": []})
-    
+
     files = [f for f in os.listdir(books_dir) if f.endswith(".epub")]
     deleted, errors = [], []
     for name in files:
@@ -515,3 +508,15 @@ def delete_all_epubs_local():
         except Exception as e:
             errors.append({"name": name, "error": str(e)})
     return success({"deleted": deleted, "errors": errors})
+
+
+# ===== Wildcard — MUST be last to avoid shadowing specific routes =====
+
+
+@router.get("/epubs/{ebook_id}")
+def get_epub(ebook_id: int, service: EpubService = Depends(get_service)):
+    """Get single EPUB metadata by ID (database mode)."""
+    record = service.get_epub(ebook_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Epub not found")
+    return success({"epub": _serialize_epub(record)})
