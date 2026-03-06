@@ -1,0 +1,93 @@
+/* ─── Generate Form ──────────────────────────────────────────────────── */
+form#genForm {
+    display: flex;
+    flex-direction: column;
+    gap: .9rem;
+    align-items: flex-start;
+}
+
+form label {
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .9px;
+    opacity: .75;
+    display: block;
+    margin: 0 0 .4rem;
+    font-weight: 600;
+}
+
+form input[type=text],
+form input[type=number] {
+    width: 100%;
+    padding: .62rem .75rem;
+    border: 1px solid #2b3644;
+    background: #0f141a;
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    font-size: .95rem;
+    line-height: 1.2;
+    transition: .18s border, .18s background, .18s box-shadow;
+    box-sizing: border-box;
+}
+
+form input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus);
+    background: #101923;
+}
+
+.field.url {
+    width: 100%;
+}
+
+.field.narrow {
+    width: 200px;
+    max-width: 100%;
+}
+
+.field.buttons {
+    display: flex;
+    gap: .6rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 620px) {
+    .field.narrow {
+        width: 100%;
+    }
+}
+
+/* ─── Progress Bar ───────────────────────────────────────────────────── */
+.progress-wrap {
+    margin-top: .7rem;
+    display: none;
+}
+
+.progress-wrap.visible {
+    display: block;
+}
+
+.progress-label {
+    font-size: .68rem;
+    opacity: .7;
+    margin-bottom: .35rem;
+    display: flex;
+    justify-content: space-between;
+}
+
+.progress-track {
+    height: 6px;
+    background: var(--bg-accent);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), #60a5fa);
+    border-radius: 999px;
+    transition: width .4s ease;
+    width: 0%;
+}

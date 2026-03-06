@@ -1,0 +1,62 @@
+/* ─── Design Tokens ──────────────────────────────────────────────────── */
+:root {
+    color-scheme: dark light;
+    --bg: #0d1117;
+    --bg-alt: #161b22;
+    --bg-accent: #1e2530;
+    --panel: #1b222c;
+    --panel-alt: #243041;
+    --border: #2d3745;
+    --text: #e6edf3;
+    --text-dim: #8b97a5;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --success: #22c55e;
+    --warn: #f59e0b;
+    --header-g1: #111a25;
+    --header-g2: #16202c;
+    --header-g3: #1d2835;
+    --resizer-bg: #ffffff10;
+    --resizer-hover-bg: #ffffff18;
+    --input-bg: #0f141a;
+    --input-border: #2b3644;
+    --input-bg-focus: #101923;
+    --secondary-border: #2d3a48;
+    --secondary-hover-bg: #263242;
+    --secondary-hover-border: #3a4b5e;
+    --row-hover-bg: #1f2935;
+    --badge-bg: #4338ca;
+    --spinner-border: #ffffff40;
+    --spinner-top: #fff;
+    --log-bg: #0a0f14;
+    --log-inset1: #1f2933;
+    --log-inset2: #0d141b;
+    --page-bg: radial-gradient(circle at 25% 15%, #19202b 0%, #0d1117 55%) fixed;
+    --radius: 14px;
+    --radius-sm: 8px;
+    --shadow-sm: 0 2px 4px -1px #0007, 0 1px 2px -1px #0009;
+    --shadow: 0 6px 18px -8px #000a, 0 3px 8px -3px #0008;
+    --focus: 0 0 0 2px #0d1117, 0 0 0 4px var(--accent);
+    --sidebar-width: 380px;
+    --header-height: 86px;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+:root.light {
+    --bg: #f5f7fa; --bg-alt: #ffffff; --bg-accent: #e8eef5;
+    --panel: #ffffff; --panel-alt: #f4f7fb; --border: #d9e1ea;
+    --text: #1e2933; --text-dim: #526170;
+    --accent: #2563eb; --accent-hover: #1d4ed8;
+    --danger: #dc2626; --danger-hover: #b91c1c;
+    --header-g1: #f6f9fc; --header-g2: #eef3f9; --header-g3: #e9eff7;
+    --resizer-bg: #00000010; --resizer-hover-bg: #0000001f;
+    --input-bg: #ffffff; --input-border: #d9e1ea; --input-bg-focus: #f4f7fb;
+    --secondary-border: #cbd5e1; --secondary-hover-bg: #e2e9f2;
+    --secondary-hover-border: #c0cbd9; --row-hover-bg: #eef3f9;
+    --badge-bg: #4338ca; --spinner-border: #00000020; --spinner-top: #000;
+    --log-bg: #f6f9fc; --log-inset1: #e3eaf2; --log-inset2: #eaeff6;
+    --page-bg: radial-gradient(circle at 25% 15%, #eef3f9 0%, #ffffff 55%) fixed;
+    color-scheme: light;
+}

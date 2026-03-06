@@ -22,7 +22,7 @@ def int_to_roman(input):
     return result
 
 
-def to_epub(metadata, chapter_data, chapters_per_book=500):
+def to_epub(metadata, chapter_data, chapters_per_book=500, start_chapter_offset: int = 0):
     # Minimal valid EPUB: only chapters, no custom CSS, no extra pages
     titles_in = chapter_data.get('title', []) or []
     texts_in = chapter_data.get('text', []) or []
@@ -95,23 +95,31 @@ def to_epub(metadata, chapter_data, chapters_per_book=500):
         front_page = epub.EpubHtml(title="Front Page", file_name="front.xhtml", lang="en")
         front_page.content = f"<html><head><title>{title} - Front Page</title><style>{style}</style></head><body>{front_body}</body></html>"
         book.add_item(front_page)
-        start_idx = book_index * chapters_per_book
-        end_idx = min(start_idx + chapters_per_book, total_chapters)
+
+        local_start = book_index * chapters_per_book    # index into filtered_titles
+        local_end = min(local_start + chapters_per_book, total_chapters)
+
+        # Absolute chapter numbers for filename (considering offset for append mode)
+        abs_ch_start = start_chapter_offset + local_start + 1
+        abs_ch_end = start_chapter_offset + local_end
+
         epub_chapters = [front_page]
 
-        for idx in range(start_idx, end_idx):
-            title = filtered_titles[idx]
-            raw_content = filtered_texts[idx]
+        for local_idx in range(local_start, local_end):
+            abs_idx = start_chapter_offset + local_idx   # 0-based absolute index
+            ch_title = filtered_titles[local_idx]
+            raw_content = filtered_texts[local_idx]
             paras = [p.strip() for p in raw_content.split('\n') if p.strip()]
-            chapter_body = f"<h1>{title}</h1>" + ''.join(f"<p>{p}</p>" for p in paras)
+            chapter_body = f"<h1>{ch_title}</h1>" + ''.join(f"<p>{p}</p>" for p in paras)
             chapter = epub.EpubHtml(
-                title=title,
-                file_name=f'chap_{idx+1}.xhtml',
+                title=ch_title,
+                file_name=f'chap_{abs_idx+1}.xhtml',
                 lang='en'
             )
-            chapter.content = f"<html><head><title>{title}</title></head><body>{chapter_body}</body></html>"
+            chapter.content = f"<html><head><title>{ch_title}</title></head><body>{chapter_body}</body></html>"
             book.add_item(chapter)
             epub_chapters.append(chapter)
+            print(f"[PROGRESS] Chapter {abs_idx + 1} processed ({local_idx - local_start + 1}/{local_end - local_start})")
 
         # TOC and spine: front page first
         book.toc = tuple(epub_chapters)
@@ -120,8 +128,9 @@ def to_epub(metadata, chapter_data, chapters_per_book=500):
         book.add_item(epub.EpubNcx())
         book.add_item(epub.EpubNav())
 
-        roman_part = int_to_roman(book_index + 1)
-        filename = metadata.get('title', 'untitled').replace(" ", "_").replace(":", "_").lower() + f"-{roman_part}.epub"
+        # Filename: title-ch-START-END.epub (e.g. my_novel-ch-1-500.epub)
+        base_name = metadata.get('title', 'untitled').replace(" ", "_").replace(":", "_").lower()
+        filename = f"{base_name}-ch-{abs_ch_start}-{abs_ch_end}.epub"
 
         os.makedirs("books", exist_ok=True)
         epub.write_epub(f'books/{filename}', book, {})

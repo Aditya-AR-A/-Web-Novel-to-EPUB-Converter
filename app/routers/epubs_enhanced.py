@@ -101,13 +101,21 @@ class GenerateEpubRequest(BaseModel):
     start_chapter: int | None = 1
 
 
+class AppendEpubRequest(BaseModel):
+    url: str
+    start_chapter: int  # first NEW chapter number to fetch
+    chapters_per_book: int | None = 500
+    chapter_workers: int | None = 1
+    chapter_limit: int | None = 0
+
+
 @router.post("/epub/generate")
 def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends(get_service)):
     """Generate EPUB with local file storage (HuggingFace mode)."""
     settings = get_settings()
     books_dir = settings.local_storage_path
     os.makedirs(books_dir, exist_ok=True)
-    
+
     job_id = "gen-api"
     try:
         start_job(job_id)
@@ -136,11 +144,16 @@ def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends
                 return error(f"Remote generation failed: {e}", code="storage_upload_failed", status=502)
             end_job(job_id)
             return success({"epub": _serialize_epub(record)})
+
+        start_ch = req.start_chapter if req.start_chapter and req.start_chapter > 0 else 1
+        ch_limit = req.chapter_limit if req.chapter_limit and req.chapter_limit > 0 else None
+        print(f"[PROGRESS] Fetching chapters starting at ch {start_ch}" + (f", limit {ch_limit}" if ch_limit else "") + "...")
+
         chapters = scraper.get_chapters(
             req.url if (req.chapter_workers or 0) > 0 else metadata.get("starting_url", req.url),
             chapter_workers=req.chapter_workers or 0,
-            chapter_limit=(req.chapter_limit if req.chapter_limit and req.chapter_limit > 0 else None),
-            start_chapter=(req.start_chapter if req.start_chapter and req.start_chapter > 0 else 1)
+            chapter_limit=ch_limit,
+            start_chapter=start_ch,
         )
     except CancelledError as ce:
         end_job(job_id)
@@ -151,10 +164,14 @@ def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends
 
     titles = chapters.get('title', [])
     texts = chapters.get('text', [])
-    if not any(x and x.strip() for x in texts):
+    valid_count = sum(1 for x in texts if x and x.strip())
+
+    if valid_count == 0:
         end_job(job_id)
-    return error("No valid chapter content collected.", code="no_chapters", status=422)
-    
+        return error("No valid chapter content collected.", code="no_chapters", status=422)
+
+    print(f"[PROGRESS] Fetched {valid_count} valid chapters. Building EPUB(s)...")
+
     try:
         convert_to_epub.to_epub(
             metadata,
@@ -169,21 +186,110 @@ def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends
         end_job(job_id)
         return error(f"EPUB generation failed: {e}", code="epub_generation_failed", status=500)
 
-    base = (metadata.get('title', 'untitled').replace(' ', '_').replace(':', '_').lower())
-    produced = []
-    for name in sorted(os.listdir(books_dir)):
-        if name.startswith(base + '-') and name.endswith('.epub'):
-            produced.append(name)
-    if not produced:
-        for name in sorted(os.listdir(books_dir)):
-            if name.endswith('.epub') and base in name:
-                produced.append(name)
-
+    produced = _find_produced_epubs(books_dir, metadata.get('title', 'untitled'))
+    print(f"[PROGRESS] Done. Produced {len(produced)} file(s): {', '.join(produced)}")
     return success({
         "filenames": produced,
         "count": len(produced),
-        "chapters": len(titles)
+        "chapters": valid_count,
     })
+
+
+def _find_produced_epubs(books_dir: str, novel_title: str) -> List[str]:
+    """Return all epub filenames in books_dir that belong to this novel, sorted vol-first."""
+    import re as _re
+    base = novel_title.replace(' ', '_').replace(':', '_').lower()
+    base = _re.sub(r'_+', '_', base).strip('_')
+    matches = []
+    for name in os.listdir(books_dir):
+        if not name.endswith('.epub'):
+            continue
+        if base in name.lower():
+            matches.append(name)
+
+    def _sort_key(n):
+        m = _re.search(r'ch-(\d+)', n)
+        return int(m.group(1)) if m else 0
+
+    matches.sort(key=_sort_key)
+    return matches
+
+
+@router.post("/epub/append")
+def append_epub_chapters(req: AppendEpubRequest, service: EpubService = Depends(get_service)):
+    """Fetch new chapters starting from start_chapter and rebuild/extend EPUB volumes.
+
+    Existing EPUBs for the novel are NOT deleted — new volumes are added alongside them
+    unless they share the same chapter range, in which case they overwrite.
+    """
+    settings = get_settings()
+    books_dir = settings.local_storage_path
+    os.makedirs(books_dir, exist_ok=True)
+
+    if req.start_chapter < 1:
+        return error("start_chapter must be >= 1", code="invalid_params", status=400)
+
+    job_id = "append-api"
+    try:
+        start_job(job_id)
+        print(f"[APPEND] Fetching metadata for {req.url}")
+        metadata = scraper.get_chapter_metadata(req.url)
+
+        ch_limit = req.chapter_limit if req.chapter_limit and req.chapter_limit > 0 else None
+        print(f"[APPEND] Scraping from chapter {req.start_chapter}" + (f" (limit {ch_limit})" if ch_limit else "") + "...")
+
+        chapters = scraper.get_chapters(
+            req.url if (req.chapter_workers or 0) > 0 else metadata.get("starting_url", req.url),
+            chapter_workers=req.chapter_workers or 0,
+            chapter_limit=ch_limit,
+            start_chapter=req.start_chapter,
+        )
+    except CancelledError as ce:
+        end_job(job_id)
+        return error(str(ce), code="cancelled", status=499)
+    except Exception as e:
+        end_job(job_id)
+        return error(f"Chapter fetch failed: {e}", code="chapter_fetch_failed", status=502)
+
+    texts = chapters.get('text', [])
+    valid_count = sum(1 for x in texts if x and x.strip())
+    if valid_count == 0:
+        end_job(job_id)
+        return error("No new chapters found from start_chapter.", code="no_new_chapters", status=422)
+
+    print(f"[APPEND] Got {valid_count} new chapters starting at ch {req.start_chapter}. Building...")
+
+    # Patch chapter indices so filenames use correct range (ch-START-END)
+    try:
+        convert_to_epub.to_epub(
+            metadata,
+            chapters,
+            chapters_per_book=req.chapters_per_book or 500,
+            start_chapter_offset=req.start_chapter - 1,
+        )
+        end_job(job_id)
+    except CancelledError as ce:
+        end_job(job_id)
+        return error(str(ce), code="cancelled", status=499)
+    except Exception as e:
+        end_job(job_id)
+        return error(f"EPUB build failed: {e}", code="epub_generation_failed", status=500)
+
+    produced = _find_produced_epubs(books_dir, metadata.get('title', 'untitled'))
+    new_files = [f for f in produced if _chapter_start_of(f) >= req.start_chapter]
+    print(f"[APPEND] Done. New files: {', '.join(new_files)}")
+    return success({
+        "filenames": produced,
+        "new_filenames": new_files,
+        "new_chapters": valid_count,
+    })
+
+
+def _chapter_start_of(filename: str) -> int:
+    """Extract starting chapter number from filename like title-ch-501-1000.epub."""
+    import re as _re
+    m = _re.search(r'ch-(\d+)-', filename)
+    return int(m.group(1)) if m else 0
 
 
 @router.post("/epub/cancel")
