@@ -98,4 +98,4 @@ def main(url: str | list | None = None):
 
 if __name__ == "__main__":
     sys.exit(main())
-    
+    print("Exit")
