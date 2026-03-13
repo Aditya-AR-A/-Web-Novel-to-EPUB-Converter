@@ -66,13 +66,37 @@ export function renderGrid(items) {
         const card = document.createElement('div');
         card.className = 'novel-card';
 
+        const header = document.createElement('div');
+        header.className = 'novel-card-header';
+
         const titleEl = document.createElement('div');
         titleEl.className = 'novel-card-title';
         titleEl.textContent = humanTitle(base);
 
+        header.appendChild(titleEl);
+
+        const metaRow = document.createElement('div');
+        metaRow.style.display = 'flex';
+        metaRow.style.alignItems = 'center';
+
         const meta = document.createElement('div');
         meta.className = 'novel-card-meta';
         meta.textContent = `${vols.length} volume${vols.length !== 1 ? 's' : ''}`;
+
+        const expandBtn = document.createElement('button');
+        expandBtn.className = 'novel-card-expand-btn';
+        expandBtn.textContent = vols.length <= 3 ? 'Collapse' : 'Expand';
+
+        metaRow.appendChild(meta);
+        metaRow.appendChild(expandBtn);
+
+        const volContainer = document.createElement('div');
+        volContainer.className = 'volume-container' + (vols.length <= 3 ? ' expanded' : '');
+
+        expandBtn.addEventListener('click', () => {
+            const isExpanded = volContainer.classList.toggle('expanded');
+            expandBtn.textContent = isExpanded ? 'Collapse' : 'Expand';
+        });
 
         const volList = document.createElement('div');
         volList.className = 'volume-list';
@@ -101,7 +125,8 @@ export function renderGrid(items) {
             volList.appendChild(row);
         });
 
-        card.append(titleEl, meta, volList);
+        volContainer.appendChild(volList);
+        card.append(header, metaRow, volContainer);
         gridView.appendChild(card);
     }
 }
@@ -118,14 +143,94 @@ export function renderList(items, page, pageSize) {
 
     const start = (page - 1) * pageSize;
     const pageItems = filtered.slice(start, start + pageSize);
+    const grouped = groupByNovel(pageItems);
 
-    epubBody.innerHTML = pageItems.map(name => `
-        <tr>
-            <td><input type='checkbox' class='sel' data-name='${escapeHTML(name)}' ${selectedNames.has(name) ? 'checked' : ''} /></td>
-            <td>${escapeHTML(name)}</td>
-            <td><button class='secondary sm list-dl-btn' data-name='${escapeHTML(name)}'>⬇ Download</button></td>
-        </tr>
-    `).join('') || `<tr><td colspan='3' style='padding:1rem;opacity:.5;'>No EPUBs found.</td></tr>`;
+    if (grouped.size === 0) {
+        epubBody.innerHTML = `<tr><td colspan='3' style='padding:1rem;opacity:.5;'>No EPUBs found.</td></tr>`;
+    } else {
+        epubBody.innerHTML = '';
+        let groupId = 0;
+        for (const [base, vols] of grouped) {
+            groupId++;
+            const expanded = vols.length <= 3;
+
+            const trGroup = document.createElement('tr');
+            trGroup.className = 'list-group-header';
+            const trGroupTd = document.createElement('td');
+            trGroupTd.setAttribute('colspan', '3');
+
+            const trGroupDiv = document.createElement('div');
+            trGroupDiv.style.display = 'flex';
+            trGroupDiv.style.justifyContent = 'space-between';
+            trGroupDiv.style.alignItems = 'center';
+
+            const trGroupStrong = document.createElement('strong');
+            trGroupStrong.textContent = escapeHTML(humanTitle(base));
+
+            const trGroupSpan = document.createElement('span');
+            trGroupSpan.style.fontSize = '0.75rem';
+            trGroupSpan.style.opacity = '0.7';
+            trGroupSpan.style.fontWeight = 'normal';
+            trGroupSpan.textContent = ` (${vols.length} vol)`;
+            trGroupStrong.appendChild(trGroupSpan);
+
+            const trGroupBtn = document.createElement('button');
+            trGroupBtn.className = 'secondary sm list-expand-btn';
+            trGroupBtn.dataset.group = groupId;
+            trGroupBtn.textContent = expanded ? 'Collapse' : 'Expand';
+
+            trGroupDiv.appendChild(trGroupStrong);
+            trGroupDiv.appendChild(trGroupBtn);
+            trGroupTd.appendChild(trGroupDiv);
+            trGroup.appendChild(trGroupTd);
+
+            epubBody.appendChild(trGroup);
+
+            vols.forEach(name => {
+                const tr = document.createElement('tr');
+                tr.className = `list-group-item group-${groupId}`;
+                tr.style.display = expanded ? '' : 'none';
+
+                const td1 = document.createElement('td');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'sel';
+                cb.dataset.name = name;
+                cb.checked = selectedNames.has(name);
+                td1.appendChild(cb);
+
+                const td2 = document.createElement('td');
+                td2.textContent = name;
+
+                const td3 = document.createElement('td');
+                const btn = document.createElement('button');
+                btn.className = 'secondary sm list-dl-btn';
+                btn.dataset.name = name;
+                btn.textContent = '⬇ Download';
+                td3.appendChild(btn);
+
+                tr.appendChild(td1);
+                tr.appendChild(td2);
+                tr.appendChild(td3);
+                epubBody.appendChild(tr);
+            });
+        }
+    }
+
+    epubBody.querySelectorAll('.list-expand-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const gid = btn.dataset.group;
+            const rows = epubBody.querySelectorAll(`.group-${gid}`);
+            if (!rows.length) return;
+
+            const shouldExpand = rows[0].style.display === 'none';
+            rows.forEach(r => {
+                r.style.display = shouldExpand ? '' : 'none';
+            });
+
+            btn.textContent = shouldExpand ? 'Collapse' : 'Expand';
+        });
+    });
 
     epubBody.querySelectorAll('input.sel').forEach(cb =>
         cb.addEventListener('change', () => toggleSel(cb.dataset.name, cb.checked))

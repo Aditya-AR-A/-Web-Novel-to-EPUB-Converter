@@ -118,8 +118,22 @@ main {
     }
 
     .sidebar {
-        position: static;
-        height: auto;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 50vh;
+        z-index: 100;
+        transform: translateY(100%);
+        transition: transform 0.3s ease;
+        background: var(--page-bg);
+        border-top: 1px solid var(--border);
+        box-shadow: 0 -4px 12px rgba(0,0,0,0.15);
+        display: block !important;
+    }
+
+    html:not(.logs-collapsed) .sidebar {
+        transform: translateY(0);
     }
 
     .resizer {
