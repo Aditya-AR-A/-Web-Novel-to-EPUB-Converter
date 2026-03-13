@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -111,9 +112,23 @@ def download_many_epubs(
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        for record in records:
-            file_buffer = service.download_buffer(record.s3_key)
-            zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
+        with ThreadPoolExecutor() as executor:
+            # Submit download tasks for all records
+            future_to_key = {
+                executor.submit(service.download_buffer, record.s3_key): record.s3_key
+                for record in records
+            }
+
+            # Write each downloaded buffer to the ZIP as it completes
+            for future in as_completed(future_to_key):
+                s3_key = future_to_key[future]
+                try:
+                    file_buffer = future.result()
+                    zipf.writestr(Path(s3_key).name, file_buffer.getvalue())
+                except Exception as exc:
+                    # In a production app, we might want to handle this differently,
+                    # but for now we follow the existing pattern of letting it raise.
+                    raise exc
     zip_buffer.seek(0)
 
     headers = {"Content-Disposition": "attachment; filename=epubs.zip"}
@@ -128,9 +143,21 @@ def download_all_epubs(service: EpubService = Depends(get_service)):
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        for record in records:
-            file_buffer = service.download_buffer(record.s3_key)
-            zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
+        with ThreadPoolExecutor() as executor:
+            # Submit download tasks for all records
+            future_to_key = {
+                executor.submit(service.download_buffer, record.s3_key): record.s3_key
+                for record in records
+            }
+
+            # Write each downloaded buffer to the ZIP as it completes
+            for future in as_completed(future_to_key):
+                s3_key = future_to_key[future]
+                try:
+                    file_buffer = future.result()
+                    zipf.writestr(Path(s3_key).name, file_buffer.getvalue())
+                except Exception as exc:
+                    raise exc
     zip_buffer.seek(0)
 
     headers = {"Content-Disposition": "attachment; filename=all_epubs.zip"}
