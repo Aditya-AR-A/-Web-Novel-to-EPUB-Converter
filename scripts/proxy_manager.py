@@ -194,11 +194,11 @@ def fetch_with_proxy_rotation(
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
     ]
     for attempt in range(retries):
-        if attempt == 0 and preferred_first_proxy is not None:
+        if attempt == 0 and preferred_first_proxy is not None and (preferred_first_proxy not in _quarantined_until or time.time() > _quarantined_until[preferred_first_proxy]):
             proxy_url = preferred_first_proxy
         elif attempt == 0 and allow_no_proxy and not PRIMARY_PROXY:
             proxy_url = None
-        elif attempt == 1 and allow_no_proxy and not PRIMARY_PROXY:
+        elif attempt == 1 and allow_no_proxy and not PRIMARY_PROXY and preferred_first_proxy is not None:
             proxy_url = None
         else:
             # Build a candidate set avoiding previously attempted and avoid list
@@ -240,14 +240,18 @@ def fetch_with_proxy_rotation(
             last_exc = e
             print(f"[proxy_manager] Blocked for {url} proxy={proxy_url}: {e}")
             if proxy_url:
-                _proxy_failures[proxy_url] = _proxy_failures.get(proxy_url, 0) - 1
+                score = _proxy_failures.get(proxy_url, 0) - 1
+                _proxy_failures[proxy_url] = score
+                if score <= MIN_PROXY_HEALTH:
+                    _quarantined_until[proxy_url] = time.time() + _QUARANTINE_SECONDS
+                    print(f"[proxy_manager] Quarantined {proxy_url} fail_score={score}")
             if SHORT_CIRCUIT_ON_FIRST_403:
                 break
         except Exception as e:
             last_exc = e
             print(f"[proxy_manager] Attempt {attempt+1}/{retries} failed for {url} proxy={proxy_url}: {e}")
             if proxy_url:
-                score = _proxy_failures.get(proxy_url, 0) + 1
+                score = _proxy_failures.get(proxy_url, 0) - 1
                 _proxy_failures[proxy_url] = score
                 if score <= MIN_PROXY_HEALTH:
                     _quarantined_until[proxy_url] = time.time() + _QUARANTINE_SECONDS
