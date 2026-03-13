@@ -66,13 +66,37 @@ export function renderGrid(items) {
         const card = document.createElement('div');
         card.className = 'novel-card';
 
+        const header = document.createElement('div');
+        header.className = 'novel-card-header';
+
         const titleEl = document.createElement('div');
         titleEl.className = 'novel-card-title';
         titleEl.textContent = humanTitle(base);
 
+        header.appendChild(titleEl);
+
+        const metaRow = document.createElement('div');
+        metaRow.style.display = 'flex';
+        metaRow.style.alignItems = 'center';
+
         const meta = document.createElement('div');
         meta.className = 'novel-card-meta';
         meta.textContent = `${vols.length} volume${vols.length !== 1 ? 's' : ''}`;
+
+        const expandBtn = document.createElement('button');
+        expandBtn.className = 'novel-card-expand-btn';
+        expandBtn.textContent = vols.length <= 3 ? 'Collapse' : 'Expand';
+
+        metaRow.appendChild(meta);
+        metaRow.appendChild(expandBtn);
+
+        const volContainer = document.createElement('div');
+        volContainer.className = 'volume-container' + (vols.length <= 3 ? ' expanded' : '');
+
+        expandBtn.addEventListener('click', () => {
+            const isExpanded = volContainer.classList.toggle('expanded');
+            expandBtn.textContent = isExpanded ? 'Collapse' : 'Expand';
+        });
 
         const volList = document.createElement('div');
         volList.className = 'volume-list';
@@ -101,7 +125,8 @@ export function renderGrid(items) {
             volList.appendChild(row);
         });
 
-        card.append(titleEl, meta, volList);
+        volContainer.appendChild(volList);
+        card.append(header, metaRow, volContainer);
         gridView.appendChild(card);
     }
 }
@@ -118,14 +143,60 @@ export function renderList(items, page, pageSize) {
 
     const start = (page - 1) * pageSize;
     const pageItems = filtered.slice(start, start + pageSize);
+    const grouped = groupByNovel(pageItems);
 
-    epubBody.innerHTML = pageItems.map(name => `
-        <tr>
-            <td><input type='checkbox' class='sel' data-name='${escapeHTML(name)}' ${selectedNames.has(name) ? 'checked' : ''} /></td>
-            <td>${escapeHTML(name)}</td>
-            <td><button class='secondary sm list-dl-btn' data-name='${escapeHTML(name)}'>⬇ Download</button></td>
-        </tr>
-    `).join('') || `<tr><td colspan='3' style='padding:1rem;opacity:.5;'>No EPUBs found.</td></tr>`;
+    if (grouped.size === 0) {
+        epubBody.innerHTML = `<tr><td colspan='3' style='padding:1rem;opacity:.5;'>No EPUBs found.</td></tr>`;
+    } else {
+        epubBody.innerHTML = '';
+        let groupId = 0;
+        for (const [base, vols] of grouped) {
+            groupId++;
+            const expanded = vols.length <= 3;
+
+            const trGroup = document.createElement('tr');
+            trGroup.className = 'list-group-header';
+            trGroup.innerHTML = `
+                <td colspan="3">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <strong>${escapeHTML(humanTitle(base))} <span style="font-size: 0.75rem; opacity: 0.7; font-weight: normal;">(${vols.length} vol)</span></strong>
+                        <button class="secondary sm list-expand-btn" data-group="${groupId}">${expanded ? 'Collapse' : 'Expand'}</button>
+                    </div>
+                </td>
+            `;
+            epubBody.appendChild(trGroup);
+
+            vols.forEach(name => {
+                const tr = document.createElement('tr');
+                tr.className = `list-group-item group-${groupId}`;
+                tr.style.display = expanded ? '' : 'none';
+                tr.innerHTML = `
+                    <td><input type='checkbox' class='sel' data-name='${escapeHTML(name)}' ${selectedNames.has(name) ? 'checked' : ''} /></td>
+                    <td>${escapeHTML(name)}</td>
+                    <td><button class='secondary sm list-dl-btn' data-name='${escapeHTML(name)}'>⬇ Download</button></td>
+                `;
+                epubBody.appendChild(tr);
+            });
+        }
+    }
+
+    epubBody.querySelectorAll('.list-expand-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const gid = btn.dataset.group;
+            const rows = epubBody.querySelectorAll(`.group-${gid}`);
+            let isExpanded = false;
+            rows.forEach(r => {
+                if (r.style.display === 'none') {
+                    r.style.display = '';
+                    isExpanded = true;
+                } else {
+                    r.style.display = 'none';
+                    isExpanded = false;
+                }
+            });
+            btn.textContent = isExpanded ? 'Collapse' : 'Expand';
+        });
+    });
 
     epubBody.querySelectorAll('input.sel').forEach(cb =>
         cb.addEventListener('change', () => toggleSel(cb.dataset.name, cb.checked))

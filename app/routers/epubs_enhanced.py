@@ -109,6 +109,8 @@ class AppendEpubRequest(BaseModel):
     chapter_limit: int | None = 0
 
 
+import uuid
+
 @router.post("/epub/generate")
 def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends(get_service)):
     """Generate EPUB with local file storage (HuggingFace mode)."""
@@ -116,7 +118,7 @@ def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends
     books_dir = settings.local_storage_path
     os.makedirs(books_dir, exist_ok=True)
 
-    job_id = "gen-api"
+    job_id = f"gen-{uuid.uuid4().hex}"
     try:
         start_job(job_id)
         metadata = scraper.get_chapter_metadata(req.url)
@@ -229,7 +231,7 @@ def append_epub_chapters(req: AppendEpubRequest, service: EpubService = Depends(
     if req.start_chapter < 1:
         return error("start_chapter must be >= 1", code="invalid_params", status=400)
 
-    job_id = "append-api"
+    job_id = f"append-{uuid.uuid4().hex}"
     try:
         start_job(job_id)
         print(f"[APPEND] Fetching metadata for {req.url}")

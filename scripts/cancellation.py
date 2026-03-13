@@ -1,12 +1,12 @@
 import threading
+import contextvars
 
-# Simple global cancellation token system.
-# For a multi-user system you'd namespace this per job; here we assume single active job.
+# Global cancellation token system namespaced by job.
+# Context variables allow concurrent tasks/threads to track their own job_id.
 
-_cancel_event = threading.Event()
-_stop_event = threading.Event()
+_jobs = {}  # job_id -> {"cancel_event": threading.Event(), "stop_event": threading.Event()}
 _lock = threading.Lock()
-_active_job_id: str | None = None
+job_context = contextvars.ContextVar('job_id', default=None)
 
 class CancelledError(RuntimeError):
     pass
@@ -17,50 +17,61 @@ class StopRequested(RuntimeError):
 
 def request_cancel():
     with _lock:
-        _cancel_event.set()
+        for job in _jobs.values():
+            job["cancel_event"].set()
 
 def request_stop():
     with _lock:
-        _stop_event.set()
+        for job in _jobs.values():
+            job["stop_event"].set()
 
 def clear_cancel(job_id: str | None = None):
     with _lock:
-        # Only clear if job matches or no job tracking specified
-        _cancel_event.clear()
-        if job_id is not None and _active_job_id == job_id:
-            pass
+        if job_id and job_id in _jobs:
+            _jobs[job_id]["cancel_event"].clear()
+        elif not job_id:
+            for job in _jobs.values():
+                job["cancel_event"].clear()
 
 def clear_stop():
     with _lock:
-        _stop_event.clear()
+        for job in _jobs.values():
+            job["stop_event"].clear()
+
+def _get_current_job():
+    job_id = job_context.get()
+    if job_id and job_id in _jobs:
+        return _jobs[job_id]
+    return None
 
 def is_cancelled() -> bool:
-    return _cancel_event.is_set()
+    job = _get_current_job()
+    return job["cancel_event"].is_set() if job else False
 
 def is_stopped() -> bool:
-    return _stop_event.is_set()
+    job = _get_current_job()
+    return job["stop_event"].is_set() if job else False
 
 def raise_if_cancelled():
-    if _cancel_event.is_set():
+    if is_cancelled():
         raise CancelledError("Operation cancelled by user")
 
 def raise_if_stopped():
-    if _stop_event.is_set():
+    if is_stopped():
         raise StopRequested("Stop requested")
 
 def start_job(job_id: str):
-    global _active_job_id
     with _lock:
-        if _active_job_id and _active_job_id != job_id and not _cancel_event.is_set():
-            raise RuntimeError("Another job already active")
-        _active_job_id = job_id
-        _cancel_event.clear()
-        _stop_event.clear()
+        if job_id not in _jobs:
+            _jobs[job_id] = {
+                "cancel_event": threading.Event(),
+                "stop_event": threading.Event()
+            }
+        _jobs[job_id]["cancel_event"].clear()
+        _jobs[job_id]["stop_event"].clear()
+    job_context.set(job_id)
 
 def end_job(job_id: str):
-    global _active_job_id
     with _lock:
-        if _active_job_id == job_id:
-            _active_job_id = None
-        _cancel_event.clear()
-        _stop_event.clear()
+        if job_id in _jobs:
+            del _jobs[job_id]

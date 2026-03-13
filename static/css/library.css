@@ -66,6 +66,35 @@
     opacity: .6;
 }
 
+.novel-card-expand-btn {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 0;
+    margin-left: auto;
+    text-decoration: underline;
+}
+
+.novel-card-expand-btn:hover {
+    color: var(--text);
+}
+
+.novel-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.volume-container {
+    display: none;
+}
+
+.volume-container.expanded {
+    display: block;
+}
+
 .volume-list {
     display: flex;
     flex-direction: column;
@@ -145,4 +174,30 @@ tbody tr {
 
 tbody tr:hover td {
     background: #1f2935;
+}
+
+.list-group-header td {
+    background: var(--bg-alt);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 0.6rem 0.65rem;
+}
+
+.list-group-item td {
+    background: transparent;
+    padding-left: 1.5rem;
+}
+
+.list-expand-btn {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 0;
+    text-decoration: underline;
+}
+
+.list-expand-btn:hover {
+    color: var(--text);
 }
