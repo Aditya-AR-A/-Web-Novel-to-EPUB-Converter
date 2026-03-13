@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -111,9 +112,15 @@ def download_many_epubs(
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        for record in records:
-            file_buffer = service.download_buffer(record.s3_key)
-            zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_to_record = {
+                executor.submit(service.download_buffer, record.s3_key): record
+                for record in records
+            }
+            for future in concurrent.futures.as_completed(future_to_record):
+                record = future_to_record[future]
+                file_buffer = future.result()
+                zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
     zip_buffer.seek(0)
 
     headers = {"Content-Disposition": "attachment; filename=epubs.zip"}
@@ -128,9 +135,15 @@ def download_all_epubs(service: EpubService = Depends(get_service)):
 
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        for record in records:
-            file_buffer = service.download_buffer(record.s3_key)
-            zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_to_record = {
+                executor.submit(service.download_buffer, record.s3_key): record
+                for record in records
+            }
+            for future in concurrent.futures.as_completed(future_to_record):
+                record = future_to_record[future]
+                file_buffer = future.result()
+                zipf.writestr(Path(record.s3_key).name, file_buffer.getvalue())
     zip_buffer.seek(0)
 
     headers = {"Content-Disposition": "attachment; filename=all_epubs.zip"}
