@@ -156,25 +156,62 @@ export function renderList(items, page, pageSize) {
 
             const trGroup = document.createElement('tr');
             trGroup.className = 'list-group-header';
-            trGroup.innerHTML = `
-                <td colspan="3">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <strong>${escapeHTML(humanTitle(base))} <span style="font-size: 0.75rem; opacity: 0.7; font-weight: normal;">(${vols.length} vol)</span></strong>
-                        <button class="secondary sm list-expand-btn" data-group="${groupId}">${expanded ? 'Collapse' : 'Expand'}</button>
-                    </div>
-                </td>
-            `;
+            const trGroupTd = document.createElement('td');
+            trGroupTd.setAttribute('colspan', '3');
+
+            const trGroupDiv = document.createElement('div');
+            trGroupDiv.style.display = 'flex';
+            trGroupDiv.style.justifyContent = 'space-between';
+            trGroupDiv.style.alignItems = 'center';
+
+            const trGroupStrong = document.createElement('strong');
+            trGroupStrong.textContent = escapeHTML(humanTitle(base));
+
+            const trGroupSpan = document.createElement('span');
+            trGroupSpan.style.fontSize = '0.75rem';
+            trGroupSpan.style.opacity = '0.7';
+            trGroupSpan.style.fontWeight = 'normal';
+            trGroupSpan.textContent = ` (${vols.length} vol)`;
+            trGroupStrong.appendChild(trGroupSpan);
+
+            const trGroupBtn = document.createElement('button');
+            trGroupBtn.className = 'secondary sm list-expand-btn';
+            trGroupBtn.dataset.group = groupId;
+            trGroupBtn.textContent = expanded ? 'Collapse' : 'Expand';
+
+            trGroupDiv.appendChild(trGroupStrong);
+            trGroupDiv.appendChild(trGroupBtn);
+            trGroupTd.appendChild(trGroupDiv);
+            trGroup.appendChild(trGroupTd);
+
             epubBody.appendChild(trGroup);
 
             vols.forEach(name => {
                 const tr = document.createElement('tr');
                 tr.className = `list-group-item group-${groupId}`;
                 tr.style.display = expanded ? '' : 'none';
-                tr.innerHTML = `
-                    <td><input type='checkbox' class='sel' data-name='${escapeHTML(name)}' ${selectedNames.has(name) ? 'checked' : ''} /></td>
-                    <td>${escapeHTML(name)}</td>
-                    <td><button class='secondary sm list-dl-btn' data-name='${escapeHTML(name)}'>⬇ Download</button></td>
-                `;
+
+                const td1 = document.createElement('td');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'sel';
+                cb.dataset.name = name;
+                cb.checked = selectedNames.has(name);
+                td1.appendChild(cb);
+
+                const td2 = document.createElement('td');
+                td2.textContent = name;
+
+                const td3 = document.createElement('td');
+                const btn = document.createElement('button');
+                btn.className = 'secondary sm list-dl-btn';
+                btn.dataset.name = name;
+                btn.textContent = '⬇ Download';
+                td3.appendChild(btn);
+
+                tr.appendChild(td1);
+                tr.appendChild(td2);
+                tr.appendChild(td3);
                 epubBody.appendChild(tr);
             });
         }
