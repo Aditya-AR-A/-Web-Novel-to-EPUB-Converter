@@ -221,17 +221,14 @@ export function renderList(items, page, pageSize) {
         btn.addEventListener('click', () => {
             const gid = btn.dataset.group;
             const rows = epubBody.querySelectorAll(`.group-${gid}`);
-            let isExpanded = false;
+            if (!rows.length) return;
+
+            const shouldExpand = rows[0].style.display === 'none';
             rows.forEach(r => {
-                if (r.style.display === 'none') {
-                    r.style.display = '';
-                    isExpanded = true;
-                } else {
-                    r.style.display = 'none';
-                    isExpanded = false;
-                }
+                r.style.display = shouldExpand ? '' : 'none';
             });
-            btn.textContent = isExpanded ? 'Collapse' : 'Expand';
+
+            btn.textContent = shouldExpand ? 'Collapse' : 'Expand';
         });
     });
 
