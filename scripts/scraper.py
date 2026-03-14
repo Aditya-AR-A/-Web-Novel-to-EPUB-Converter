@@ -188,6 +188,7 @@ def list_chapter_urls_from_index(index_url: str) -> List[Tuple[int, str]]:
 
 def get_chapters_concurrent_from_index(
     index_url: str,
+    read_first_url: str,
     *,
     max_workers: int = 5,
     limit: int | None = None,
@@ -207,7 +208,7 @@ def get_chapters_concurrent_from_index(
     if not indexed:
         print("⚠️ No chapter links found on index; falling back to sequential next-links crawl.")
         # Fallback: Follow next links starting from chapter-1 URL
-        return get_chapters_sequential(index_url, start_at=start, limit=limit)
+        return get_chapters_sequential(index_url, read_first_url, start_at=start, limit=limit)
     if limit and limit > 0:
         indexed = indexed[:limit]
 
@@ -290,7 +291,7 @@ def get_chapters_concurrent_from_index(
     # Build ordered lists; if everything failed (no results), fallback sequentially
     if not results:
         print("⚠️ All concurrent chapter fetches failed; falling back to sequential crawl.")
-        return get_chapters_sequential(index_url, start_at=start, limit=limit)
+        return get_chapters_sequential(index_url, read_first_url, start_at=start, limit=limit)
     ordered_indices = sorted(results.keys())
     titles = [results[i][0] for i in ordered_indices]
     texts = [results[i][1] for i in ordered_indices]
@@ -298,6 +299,7 @@ def get_chapters_concurrent_from_index(
 
 
 def get_chapters_sequential(
+    index_url: str,
     read_first_url: str,
     *,
     start_at: int = 1,
@@ -305,11 +307,22 @@ def get_chapters_sequential(
 ) -> Dict[str, List[str]]:
     chapter_title_list: List[str] = []
     chapter_text_list: List[str] = []
+
+    start_at = max(1, start_at)
     next_url: str | None = read_first_url
+    valid_seen = 0
+
+    # If starting beyond chapter 1, try to find the exact starting URL from the index page
+    if start_at > 1 and index_url:
+        indexed = list_chapter_urls_from_index(index_url)
+        for num, u in indexed:
+            if num == start_at:
+                next_url = u
+                valid_seen = start_at - 1
+                break
+
     empty_streak = 0
     collected = 0
-    start_at = max(1, start_at)
-    valid_seen = 0
     while next_url:
         raise_if_cancelled()
         if is_stopped():
@@ -338,7 +351,8 @@ def get_chapters_sequential(
 
 
 def get_chapters(
-    read_first_url_or_index: str,
+    index_url: str,
+    read_first_url: str,
     *,
     chapter_workers: int = 0,
     chapter_limit: int | None = None,
@@ -354,13 +368,15 @@ def get_chapters(
     start = max(1, start_chapter or 1)
     if chapter_workers and chapter_workers > 0:
         return get_chapters_concurrent_from_index(
-            read_first_url_or_index,
+            index_url,
+            read_first_url,
             max_workers=chapter_workers,
             limit=limit,
             start=start,
         )
     return get_chapters_sequential(
-        read_first_url_or_index,
+        index_url,
+        read_first_url,
         start_at=start,
         limit=limit,
     )
@@ -387,10 +403,10 @@ def scrape_novel(
 
     workers = chapter_workers or 0
     entrypoint = metadata.get("starting_url") or url
-    chapter_source = url if workers > 0 else entrypoint
 
     chapters = get_chapters(
-        chapter_source,
+        url,
+        entrypoint,
         chapter_workers=workers,
         chapter_limit=chapter_limit,
         start_chapter=start_chapter,
