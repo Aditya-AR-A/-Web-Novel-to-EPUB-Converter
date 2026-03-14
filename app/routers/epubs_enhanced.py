@@ -294,6 +294,18 @@ def _chapter_start_of(filename: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _get_safe_path(base_dir: str, filename: str) -> Optional[Path]:
+    """Resolve filename against base_dir and ensure it stays within base_dir."""
+    try:
+        base_path = Path(base_dir).resolve()
+        target_path = (base_path / filename).resolve()
+        # Verify that the resolved target path is under the base path
+        target_path.relative_to(base_path)
+        return target_path
+    except (ValueError, RuntimeError):
+        return None
+
+
 @router.post("/epub/cancel")
 def cancel_generation():
     """Cancel ongoing EPUB generation."""
@@ -352,11 +364,11 @@ def download_one_epub_local(name: str):
     """Download single EPUB from local storage."""
     settings = get_settings()
     books_dir = settings.local_storage_path
-    epub_path = os.path.join(books_dir, name)
-    
-    if not os.path.exists(epub_path):
+    epub_path = _get_safe_path(books_dir, name)
+
+    if not epub_path or not epub_path.exists():
         return error("File not found", code="not_found", status=404)
-    return FileResponse(epub_path, filename=name)
+    return FileResponse(str(epub_path), filename=name)
 
 
 @router.post("/epubs/download/one", response_class=StreamingResponse)
@@ -384,13 +396,13 @@ def download_many_epubs_local(req: DownloadManyLocalRequest):
     """Download multiple EPUBs from local storage as ZIP."""
     settings = get_settings()
     books_dir = settings.local_storage_path
-    
+
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zipf:
         for name in req.names:
-            epub_path = os.path.join(books_dir, name)
-            if os.path.exists(epub_path):
-                zipf.write(epub_path, arcname=name)
+            epub_path = _get_safe_path(books_dir, name)
+            if epub_path and epub_path.exists():
+                zipf.write(str(epub_path), arcname=name)
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=epubs.zip"})
 
@@ -480,10 +492,10 @@ def delete_many_epubs_local(names: List[str]):
 
     deleted, errors = [], []
     for name in names:
-        epub_path = os.path.join(books_dir, name)
-        if os.path.exists(epub_path):
+        epub_path = _get_safe_path(books_dir, name)
+        if epub_path and epub_path.exists():
             try:
-                os.remove(epub_path)
+                os.remove(str(epub_path))
                 deleted.append(name)
             except Exception as e:
                 errors.append({"name": name, "error": str(e)})
