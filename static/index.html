@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Web Novel → EPUB</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="description" content="Personal utility for web content." />
+    <meta name="robots" content="noindex, nofollow" />
+
+    <link rel="icon" href="/static/logo.png" type="image/png" />
+
+    <!-- Design tokens must load first so every sheet can reference them -->
+    <link rel="stylesheet" href="/static/css/variables.css" />
+    <link rel="stylesheet" href="/static/css/layout.css" />
+    <link rel="stylesheet" href="/static/css/components.css" />
+    <link rel="stylesheet" href="/static/css/form.css" />
+    <link rel="stylesheet" href="/static/css/library.css" />
+    <link rel="stylesheet" href="/static/css/logs.css" />
+</head>
+
+<body>
+
+    <!-- ── Header ──────────────────────────────────────────────────────────────── -->
+    <header>
+        <div style="display:flex;align-items:center;gap:.85rem;">
+            <img src="/static/logo.png" alt="Logo" class="logo" />
+            <h1 style="flex:1 1 auto;">Web Novel → EPUB</h1>
+            <button id="logsToggle" class="secondary" style="font-size:.65rem;padding:.5rem .7rem;"
+                title="Toggle logs sidebar">🪵 Logs</button>
+            <button id="themeToggle" class="secondary" style="font-size:.65rem;padding:.5rem .7rem;"
+                title="Toggle light/dark theme">🌗 Theme</button>
+        </div>
+    </header>
+
+    <!-- ── Main layout ─────────────────────────────────────────────────────────── -->
+    <main>
+        <div class="layout">
+
+            <!-- Left column: form + library -->
+            <div class="content">
+
+                <!-- Generate / Append Form -->
+                <div class="card fade-in">
+                    <form id="genForm">
+                        <div class="field url">
+                            <label>Novel URL <span id="modeBadge" class="mode-badge generate">GENERATE</span></label>
+                            <input type="text" id="url" placeholder="https://freewebnovel.com/novel/..." />
+                        </div>
+
+                        <div style="display:flex;gap:.75rem;flex-wrap:wrap;">
+                            <div class="field narrow">
+                                <label>Chapters / Book</label>
+                                <input type="number" id="chapters_per_book" placeholder="500 (default)" min="10"
+                                    step="10" />
+                            </div>
+                            <div class="field narrow">
+                                <label>Chapter Workers</label>
+                                <input type="number" id="chapter_workers" placeholder="1 (default)" min="1" max="16" />
+                            </div>
+                            <div class="field narrow">
+                                <label>Limit Chapters (0 = all)</label>
+                                <input type="number" id="chapter_limit" placeholder="0 = all" min="0" />
+                            </div>
+                            <div class="field narrow">
+                                <label>Start Chapter <span style="opacity:.6;">(for append)</span></label>
+                                <input type="number" id="start_chapter" placeholder="1 (default)" min="1" />
+                            </div>
+                        </div>
+
+                        <div class="field buttons">
+                            <button type="submit" class="primary" id="genBtn">⚡ Generate EPUB</button>
+                            <button type="button" class="primary append-mode" id="appendBtn">➕ Append Chapters</button>
+                            <button type="button" class="secondary danger" id="cancelBtn" disabled>✕ Cancel</button>
+                            <button type="button" class="secondary" id="stopBtn" disabled>⏹ Stop (save partial)</button>
+                        </div>
+
+                        <!-- Progress bar (shown while generating) -->
+                        <div class="progress-wrap" id="progressWrap">
+                            <div class="progress-label">
+                                <span id="progressText">Fetching chapters…</span>
+                                <span id="progressCount"></span>
+                            </div>
+                            <div class="progress-track">
+                                <div class="progress-fill" id="progressFill"></div>
+                            </div>
+                        </div>
+
+                        <div class="helper-text">
+                            <b>Generate</b>: full scrape from chapter 1.&nbsp;
+                            <b>Append</b>: scrape from <em>Start Chapter</em> and add new volumes alongside existing
+                            ones.
+                            See <a class="dl" href="/docs">/docs</a> for the API.
+                        </div>
+                    </form>
+                </div><!-- /card -->
+
+                <!-- EPUB Library -->
+                <section class="fade-in" style="animation-delay:.05s;">
+                    <div class="flex">
+                        <h2 style="font-size:.95rem;margin:.15rem 0 .4rem;font-weight:600;letter-spacing:.5px;">
+                            Available EPUBs <span id="totalBadge" style="font-size:.65rem;opacity:.55;"></span>
+                        </h2>
+                        <div class="grow"></div>
+                        <div class="actions">
+                            <div class="view-toggle">
+                                <button class="secondary active" id="gridViewBtn" title="Grid view">⊞ Grid</button>
+                                <button class="secondary" id="listViewBtn" title="List view">≡ List</button>
+                            </div>
+                            <button class="secondary" id="refreshBtn" title="Refresh">↻ Refresh</button>
+                            <input type="text" id="searchBox" placeholder="Search novels…" />
+                            <button class="secondary" id="downloadSelBtn" disabled>⬇ Download Selected</button>
+                            <button class="secondary" id="downloadAllBtn">⬇ Download All</button>
+                            <button class="secondary danger" id="deleteSelBtn" disabled>🗑 Delete Selected</button>
+                            <button class="secondary danger" id="deleteAllBtn">🗑 Delete All</button>
+                        </div>
+                    </div>
+
+                    <!-- Grid view (default) -->
+                    <div id="gridView" class="novel-grid"></div>
+
+                    <!-- List view -->
+                    <div id="listView" style="display:none;">
+                        <div class="card" style="padding:.4rem .6rem .9rem;">
+                            <table id="epubTable">
+                                <thead>
+                                    <tr>
+                                        <th style="width:32px;"><input type="checkbox" id="selectAll" /></th>
+                                        <th>Filename (Vol I first)</th>
+                                        <th style="width:130px;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="epubBody">
+                                    <tr>
+                                        <td colspan="3" style="padding:1rem;opacity:.6;background:transparent;">Loading…
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="display:flex;gap:.5rem;align-items:center;margin-top:.6rem;">
+                            <div id="pager" style="display:flex;align-items:center;gap:.4rem;"></div>
+                            <div class="grow"></div>
+                            <select id="pageSize" class="secondary" style="min-width:90px;">
+                                <option value="20" selected>20 / page</option>
+                                <option value="50">50 / page</option>
+                                <option value="100">100 / page</option>
+                            </select>
+                        </div>
+                    </div>
+                </section><!-- /library section -->
+
+                <footer class="fade-in" style="animation-delay:.15s;">
+                    Generated UI &bull; API spec at <a class="dl" href="/docs">/docs</a>
+                </footer>
+            </div><!-- /content -->
+
+            <!-- Resizer handle -->
+            <div class="resizer" id="sidebarResizer" title="Drag to resize logs panel"></div>
+
+            <!-- Right column: logs sidebar -->
+            <aside class="sidebar">
+                <section class="status-wrap fade-in" style="animation-delay:.1s;">
+                    <div class="card" style="padding:.85rem .9rem 1rem;">
+                        <div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:.6rem;opacity:.8;margin:0 0 .35rem;">
+                            <h2 style="font-size:.95rem;font-weight:600;letter-spacing:.5px;margin:0 0 .6rem;">Status /
+                                Logs</h2>
+                            <label style="display:flex;align-items:center;gap:.25rem;">
+                                <input type="checkbox" id="showAccess" /> Show access logs
+                            </label>
+                            <label style="display:flex;align-items:center;gap:.25rem;">
+                                <input type="checkbox" id="showPolling" /> Show polling logs
+                            </label>
+                        </div>
+                        <div class="status-bar" id="logBox"></div>
+                    </div>
+                </section>
+            </aside>
+
+        </div><!-- /layout -->
+    </main>
+
+    <!-- Entry point – loaded as an ES module so all imports work natively -->
+    <script type="module" src="/static/js/main.js"></script>
+
+</body>
+
+</html>
