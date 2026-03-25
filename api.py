@@ -35,6 +35,8 @@ app = FastAPI(
 def on_startup() -> None:
     try:
         mongo_uri_present = bool(os.getenv("MONGO_URI"))
+        if mongo_uri_present:
+            print(os.getenv("MONGO_URI"))
         logger.info(
             "[startup.env] backend=%s db_url_prefix=%s mongo_uri_present=%s",
             settings.storage_backend,
