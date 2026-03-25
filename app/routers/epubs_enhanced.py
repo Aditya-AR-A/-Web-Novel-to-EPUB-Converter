@@ -72,6 +72,11 @@ def _is_source_blocked(exc: Exception) -> bool:
     return any(token in msg for token in ["blocked", "forbidden", "http 403", " 403 ", "captcha"])
 
 
+def _is_source_not_found(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(token in msg for token in ["not found", "http 404", " 404 ", "http 410", " 410 "])
+
+
 # ===== Database-backed endpoints (S3/Google Drive storage) =====
 
 
@@ -170,6 +175,12 @@ def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends
         return error(str(ce), code="cancelled", status=499)
     except Exception as e:
         end_job(job_id)
+        if _is_source_not_found(e):
+            return error(
+                "Source novel URL was not found (404). Verify the URL is still valid on the source site.",
+                code="source_not_found",
+                status=404,
+            )
         if _is_source_blocked(e):
             return error(
                 "Source site blocked scraping request (403/anti-bot). Try proxies, retry later, or run from a residential network.",
@@ -266,6 +277,12 @@ def append_epub_chapters(req: AppendEpubRequest, service: EpubService = Depends(
         return error(str(ce), code="cancelled", status=499)
     except Exception as e:
         end_job(job_id)
+        if _is_source_not_found(e):
+            return error(
+                "Source novel URL was not found (404). Verify the URL is still valid on the source site.",
+                code="source_not_found",
+                status=404,
+            )
         if _is_source_blocked(e):
             return error(
                 "Source site blocked scraping request (403/anti-bot). Try proxies, retry later, or run from a residential network.",

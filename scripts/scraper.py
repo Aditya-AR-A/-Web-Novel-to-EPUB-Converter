@@ -328,10 +328,18 @@ def get_chapters_sequential(
     # If starting beyond chapter 1, try to find the exact starting URL from the index page
     if start_at > 1 and index_url:
         indexed = list_chapter_urls_from_index(index_url)
+        found_start = False
         for num, u in indexed:
             if num == start_at:
                 next_url = u
+                found_start = True
                 break
+        if not found_start and read_first_url:
+            # Best-effort fallback: rewrite chapter number in read_first_url.
+            guessed = re.sub(r"(chapter[-_])\d+", rf"\g<1>{start_at}", read_first_url, flags=re.IGNORECASE)
+            if guessed != read_first_url:
+                print(f"⚠️ Could not map start chapter from index; trying guessed URL: {guessed}")
+                next_url = guessed
 
     empty_streak = 0
     collected = 0
@@ -381,7 +389,19 @@ def get_chapters(
     """
     limit = chapter_limit if chapter_limit and chapter_limit > 0 else None
     start = max(1, start_chapter or 1)
-    entrypoint = read_first_url or index_url
+    entrypoint = read_first_url
+
+    # Backward compatibility: when only index URL is provided, resolve chapter-1 URL.
+    if not entrypoint:
+        if re.search(r"/chapter[-_]\d+", index_url, re.IGNORECASE):
+            entrypoint = index_url
+        else:
+            try:
+                metadata = get_chapter_metadata(index_url)
+                entrypoint = metadata.get("starting_url") or index_url
+            except Exception:
+                entrypoint = index_url
+
     if chapter_workers and chapter_workers > 0:
         return get_chapters_concurrent_from_index(
             index_url,
