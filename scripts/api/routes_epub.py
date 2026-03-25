@@ -108,7 +108,8 @@ def generate_epub(req: GenerateEpubRequest):
         print(f"[PROGRESS] Fetching chapters starting at ch {start_ch}" + (f", limit {ch_limit}" if ch_limit else "") + "...")
         metadata = scraper.get_chapter_metadata(req.url)
         chapters = scraper.get_chapters(
-            req.url if (req.chapter_workers or 0) > 0 else metadata.get("starting_url", req.url),
+            req.url,
+            metadata.get("starting_url", req.url),
             chapter_workers=req.chapter_workers or 0,
             chapter_limit=ch_limit,
             start_chapter=start_ch,
@@ -225,7 +226,8 @@ def append_epub_chapters(req: AppendEpubRequest):
         
         ch_limit = req.chapter_limit if req.chapter_limit and req.chapter_limit > 0 else None
         chapters = scraper.get_chapters(
-            req.url if (req.chapter_workers or 0) > 0 else metadata.get("starting_url", req.url),
+            req.url,
+            metadata.get("starting_url", req.url),
             chapter_workers=req.chapter_workers or 0,
             chapter_limit=ch_limit,
             start_chapter=start_ch,

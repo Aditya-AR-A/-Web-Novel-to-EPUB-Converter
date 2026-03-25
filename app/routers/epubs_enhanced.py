@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -26,6 +27,7 @@ from scripts.cancellation import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def get_service() -> EpubService:
@@ -63,6 +65,11 @@ def _serialize_epub(record):
 
 def error(message: str, code: str = "error", status: int = 400):
     return JSONResponse({"ok": False, "error": {"code": code, "message": message}}, status_code=status)
+
+
+def _is_source_blocked(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(token in msg for token in ["blocked", "forbidden", "http 403", " 403 ", "captcha"])
 
 
 # ===== Database-backed endpoints (S3/Google Drive storage) =====
@@ -152,7 +159,8 @@ def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends
         print(f"[PROGRESS] Fetching chapters starting at ch {start_ch}" + (f", limit {ch_limit}" if ch_limit else "") + "...")
 
         chapters = scraper.get_chapters(
-            req.url if (req.chapter_workers or 0) > 0 else metadata.get("starting_url", req.url),
+            req.url,
+            metadata.get("starting_url", req.url),
             chapter_workers=req.chapter_workers or 0,
             chapter_limit=ch_limit,
             start_chapter=start_ch,
@@ -162,6 +170,12 @@ def generate_epub_local(req: GenerateEpubRequest, service: EpubService = Depends
         return error(str(ce), code="cancelled", status=499)
     except Exception as e:
         end_job(job_id)
+        if _is_source_blocked(e):
+            return error(
+                "Source site blocked scraping request (403/anti-bot). Try proxies, retry later, or run from a residential network.",
+                code="source_blocked",
+                status=403,
+            )
         return error(f"Chapter fetch failed: {e}", code="chapter_fetch_failed", status=502)
 
     titles = chapters.get('title', [])
@@ -241,7 +255,8 @@ def append_epub_chapters(req: AppendEpubRequest, service: EpubService = Depends(
         print(f"[APPEND] Scraping from chapter {req.start_chapter}" + (f" (limit {ch_limit})" if ch_limit else "") + "...")
 
         chapters = scraper.get_chapters(
-            req.url if (req.chapter_workers or 0) > 0 else metadata.get("starting_url", req.url),
+            req.url,
+            metadata.get("starting_url", req.url),
             chapter_workers=req.chapter_workers or 0,
             chapter_limit=ch_limit,
             start_chapter=req.start_chapter,
@@ -251,6 +266,12 @@ def append_epub_chapters(req: AppendEpubRequest, service: EpubService = Depends(
         return error(str(ce), code="cancelled", status=499)
     except Exception as e:
         end_job(job_id)
+        if _is_source_blocked(e):
+            return error(
+                "Source site blocked scraping request (403/anti-bot). Try proxies, retry later, or run from a residential network.",
+                code="source_blocked",
+                status=403,
+            )
         return error(f"Chapter fetch failed: {e}", code="chapter_fetch_failed", status=502)
 
     texts = chapters.get('text', [])
@@ -341,16 +362,38 @@ def list_epubs(
     if settings.storage_backend == "local":
         books_dir = settings.local_storage_path
         if not os.path.exists(books_dir):
+            logger.info("[epubs.list] backend=local dir_missing=%s", books_dir)
             return success({"epubs": [], "total": 0, "offset": offset, "limit": limit})
 
         files_all = [f for f in os.listdir(books_dir) if f.endswith(".epub")]
         files_all.sort()
         slice_ = files_all[offset: offset + limit]
+        logger.info("[epubs.list] backend=local total=%d returned=%d", len(files_all), len(slice_))
         return success({"epubs": slice_, "total": len(files_all), "offset": offset, "limit": limit})
+
+    if settings.storage_backend == "s3":
+        # Primary source: SQL metadata
+        records = service.list_epubs()
+        if records:
+            names = [Path(record.storage_key).name for record in records if getattr(record, "storage_key", None)]
+            names = [n for n in names if n.lower().endswith(".epub")]
+            names.sort()
+            slice_ = names[offset: offset + limit]
+            logger.info("[epubs.list] backend=s3 source=sql total=%d returned=%d", len(names), len(slice_))
+            return success({"epubs": slice_, "total": len(names), "offset": offset, "limit": limit})
+
+        # Fallback source: direct object listing from S3/R2 bucket
+        keys = service.list_storage_epub_keys(prefix="epubs/")
+        names = [Path(k).name for k in keys]
+        names.sort()
+        slice_ = names[offset: offset + limit]
+        logger.info("[epubs.list] backend=s3 source=bucket total=%d returned=%d", len(names), len(slice_))
+        return success({"epubs": slice_, "total": len(names), "offset": offset, "limit": limit})
 
     records = service.list_epubs()
     sliced = records[offset: offset + limit]
     serialized = [_serialize_epub(record) for record in sliced]
+    logger.info("[epubs.list] backend=%s source=sql total=%d returned=%d", settings.storage_backend, len(records), len(serialized))
     return success({"epubs": serialized, "total": len(records), "offset": offset, "limit": limit})
     # NOTE: GET /{ebook_id} is intentionally placed AFTER all specific routes
     # (see below, after the download section) to prevent it shadowing /epubs.
@@ -366,8 +409,28 @@ def download_one_epub_local(name: str):
     books_dir = settings.local_storage_path
     epub_path = _get_safe_path(books_dir, name)
 
+    if settings.storage_backend == "s3":
+        service = get_service()
+        candidate_keys = [service.resolve_storage_key(name)]
+        if candidate_keys[0].startswith("epubs/"):
+            candidate_keys.append(candidate_keys[0].replace("epubs/", "", 1))
+
+        for key in candidate_keys:
+            try:
+                buf = service.download_buffer(key)
+                filename = Path(key).name if "/" in key else name
+                headers = {"Content-Disposition": f"attachment; filename={filename}"}
+                logger.info("[epubs.download] backend=s3 key=%s status=ok", key)
+                return StreamingResponse(_stream_bytesio(buf), media_type="application/epub+zip", headers=headers)
+            except Exception:
+                continue
+        logger.info("[epubs.download] backend=s3 key=%s status=not_found", name)
+        return error("File not found in S3 storage", code="not_found", status=404)
+
     if not epub_path or not epub_path.exists():
+        logger.info("[epubs.download] backend=local name=%s status=not_found", name)
         return error("File not found", code="not_found", status=404)
+    logger.info("[epubs.download] backend=local name=%s status=ok", name)
     return FileResponse(str(epub_path), filename=name)
 
 
@@ -399,10 +462,30 @@ def download_many_epubs_local(req: DownloadManyLocalRequest):
 
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zipf:
-        for name in req.names:
-            epub_path = _get_safe_path(books_dir, name)
-            if epub_path and epub_path.exists():
-                zipf.write(str(epub_path), arcname=name)
+        if settings.storage_backend == "s3":
+            service = get_service()
+            added = 0
+            for name in req.names:
+                candidate_keys = [service.resolve_storage_key(name)]
+                if candidate_keys[0].startswith("epubs/"):
+                    candidate_keys.append(candidate_keys[0].replace("epubs/", "", 1))
+                for key in candidate_keys:
+                    try:
+                        file_buffer = service.download_buffer(key)
+                        zipf.writestr(Path(name).name, file_buffer.getvalue())
+                        added += 1
+                        break
+                    except Exception:
+                        continue
+            logger.info("[epubs.download_many] backend=s3 requested=%d added=%d", len(req.names), added)
+        else:
+            added = 0
+            for name in req.names:
+                epub_path = _get_safe_path(books_dir, name)
+                if epub_path and epub_path.exists():
+                    zipf.write(str(epub_path), arcname=name)
+                    added += 1
+            logger.info("[epubs.download_many] backend=local requested=%d added=%d", len(req.names), added)
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=epubs.zip"})
 
@@ -413,15 +496,32 @@ def download_all_epubs_local():
     settings = get_settings()
     books_dir = settings.local_storage_path
     
-    if not os.path.exists(books_dir):
+    if settings.storage_backend != "s3" and not os.path.exists(books_dir):
+        logger.info("[epubs.download_all] backend=local dir_missing=%s", books_dir)
         return error("No books directory", code="not_found", status=404)
     
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as zipf:
-        for name in os.listdir(books_dir):
-            if name.endswith(".epub"):
-                epub_path = os.path.join(books_dir, name)
-                zipf.write(epub_path, arcname=name)
+        if settings.storage_backend == "s3":
+            service = get_service()
+            keys = service.list_storage_epub_keys(prefix="epubs/")
+            added = 0
+            for key in keys:
+                try:
+                    file_buffer = service.download_buffer(key)
+                    zipf.writestr(Path(key).name, file_buffer.getvalue())
+                    added += 1
+                except Exception:
+                    continue
+            logger.info("[epubs.download_all] backend=s3 listed=%d added=%d", len(keys), added)
+        else:
+            added = 0
+            for name in os.listdir(books_dir):
+                if name.endswith(".epub"):
+                    epub_path = os.path.join(books_dir, name)
+                    zipf.write(epub_path, arcname=name)
+                    added += 1
+            logger.info("[epubs.download_all] backend=local added=%d", added)
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=all_epubs.zip"})
 

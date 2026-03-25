@@ -19,6 +19,7 @@ const pageSizeSel = document.getElementById('pageSize');
 // ─── Mutable state ────────────────────────────────────────────────────────────
 export let allItems = [];               // raw flat filename list from server
 export const selectedNames = new Set(); // cross-view selection
+let searchTimer = null;
 
 // ─── View toggle ──────────────────────────────────────────────────────────────
 let viewMode = localStorage.getItem('epub-view') || 'grid';
@@ -217,28 +218,6 @@ export function renderList(items, page, pageSize) {
         }
     }
 
-    epubBody.querySelectorAll('.list-expand-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const gid = btn.dataset.group;
-            const rows = epubBody.querySelectorAll(`.group-${gid}`);
-            if (!rows.length) return;
-
-            const shouldExpand = rows[0].style.display === 'none';
-            rows.forEach(r => {
-                r.style.display = shouldExpand ? '' : 'none';
-            });
-
-            btn.textContent = shouldExpand ? 'Collapse' : 'Expand';
-        });
-    });
-
-    epubBody.querySelectorAll('input.sel').forEach(cb =>
-        cb.addEventListener('change', () => toggleSel(cb.dataset.name, cb.checked))
-    );
-    epubBody.querySelectorAll('.list-dl-btn').forEach(btn =>
-        btn.addEventListener('click', () => downloadSingle(btn.dataset.name))
-    );
-
     // Pagination
     const pages = Math.max(1, Math.ceil(total / pageSize));
     const cur = Math.min(page, pages);
@@ -257,11 +236,6 @@ export function renderList(items, page, pageSize) {
         html += btn(Math.min(pages, cur + 1), '›');
     }
     pager.innerHTML = html;
-    pager.querySelectorAll('button[data-page]').forEach(b =>
-        b.addEventListener('click', () => {
-            renderList(allItems, parseInt(b.dataset.page), parseInt(pageSizeSel.value) || 20);
-        })
-    );
 }
 
 // ─── Public: refresh both views ───────────────────────────────────────────────
@@ -283,8 +257,11 @@ export function initLibrary() {
     listViewBtn.addEventListener('click', () => setView('list'));
 
     searchBox.addEventListener('input', () => {
-        renderGrid(allItems);
-        renderList(allItems, 1, parseInt(pageSizeSel.value) || 20);
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+            renderGrid(allItems);
+            renderList(allItems, 1, parseInt(pageSizeSel.value) || 20);
+        }, 250);
     });
 
     pageSizeSel.addEventListener('change', () =>
@@ -296,5 +273,43 @@ export function initLibrary() {
             cb.checked = this.checked;
             toggleSel(cb.dataset.name, this.checked);
         });
+    });
+
+    // Event delegation: bind once, avoid per-render listener accumulation.
+    epubBody.addEventListener('click', e => {
+        const expandBtn = e.target.closest('.list-expand-btn');
+        if (expandBtn) {
+            const gid = expandBtn.dataset.group;
+            const rows = epubBody.querySelectorAll(`.group-${gid}`);
+            if (!rows.length) return;
+
+            const shouldExpand = rows[0].style.display === 'none';
+            rows.forEach(r => {
+                r.style.display = shouldExpand ? '' : 'none';
+            });
+
+            expandBtn.textContent = shouldExpand ? 'Collapse' : 'Expand';
+            return;
+        }
+
+        const dlBtn = e.target.closest('.list-dl-btn');
+        if (dlBtn?.dataset.name) {
+            downloadSingle(dlBtn.dataset.name);
+        }
+    });
+
+    epubBody.addEventListener('change', e => {
+        const cb = e.target.closest('input.sel');
+        if (cb?.dataset.name) {
+            toggleSel(cb.dataset.name, cb.checked);
+        }
+    });
+
+    pager.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-page]');
+        if (!btn) return;
+        const page = parseInt(btn.dataset.page, 10);
+        if (Number.isNaN(page)) return;
+        renderList(allItems, page, parseInt(pageSizeSel.value) || 20);
     });
 }

@@ -16,7 +16,7 @@ MIN_PROXY_HEALTH = int(os.getenv("MIN_PROXY_HEALTH", "-3"))  # when failures sco
 RETRY_BACKOFF_BASE = float(os.getenv("RETRY_BACKOFF_BASE", "0.6"))
 MAX_BACKOFF = float(os.getenv("MAX_BACKOFF", "4.0"))
 ENABLE_BLOCK_DETECT = os.getenv("ENABLE_BLOCK_DETECT", "1") == "1"
-SHORT_CIRCUIT_ON_FIRST_403 = os.getenv("SHORT_CIRCUIT_ON_FIRST_403", "1") == "1"
+SHORT_CIRCUIT_ON_FIRST_403 = os.getenv("SHORT_CIRCUIT_ON_FIRST_403", "0") == "1"
 
 _proxies_lock = threading.Lock()
 _proxies: List[str] = []
@@ -228,9 +228,9 @@ def fetch_with_proxy_rotation(
         }
         try:
             resp = requests.get(url, timeout=timeout, proxies=proxies, headers=headers)
-            resp.raise_for_status()
             if ENABLE_BLOCK_DETECT and _looks_blocked(resp):
-                raise BlockedError(f"Blocked content detected (status={resp.status_code})")
+                raise BlockedError(f"Blocked by source site (HTTP {resp.status_code})")
+            resp.raise_for_status()
             if attempt > 0:
                 print(f"[proxy_manager] Success after {attempt+1} attempt(s) using proxy={proxy_url}")
             if proxy_url and proxy_url in _proxy_failures:

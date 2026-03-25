@@ -6,6 +6,7 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from app.config import get_settings
 from app.db import Base, engine
@@ -16,6 +17,12 @@ from app.storage import get_storage
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+startup_status = {
+    "ready": False,
+    "db_ok": False,
+    "storage_ok": settings.storage_backend == "local",
+    "error": None,
+}
 
 app = FastAPI(
     title="Web Novel to EPUB Converter API",
@@ -26,20 +33,48 @@ app = FastAPI(
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    
-    # Only check storage if not using local mode
-    if settings.storage_backend != "local":
-        try:
+    try:
+        mongo_uri_present = bool(os.getenv("MONGO_URI"))
+        logger.info(
+            "[startup.env] backend=%s db_url_prefix=%s mongo_uri_present=%s",
+            settings.storage_backend,
+            settings.database_url.split(":", 1)[0],
+            mongo_uri_present,
+        )
+        if mongo_uri_present:
+            logger.info("MONGO_URI is set but this build uses SQLAlchemy DATABASE_URL. MongoDB metadata is not used unless migrated to a SQL database.")
+
+        if settings.storage_backend == "s3":
+            logger.info(
+                "[startup.s3] bucket_set=%s access_key_set=%s secret_set=%s endpoint_set=%s region=%s",
+                bool(settings.resolved_s3_bucket),
+                bool(settings.resolved_s3_access_key_id),
+                bool(settings.resolved_s3_secret_access_key),
+                bool(settings.resolved_s3_endpoint_url),
+                settings.resolved_s3_region,
+            )
+
+        Base.metadata.create_all(bind=engine)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        startup_status["db_ok"] = True
+
+        # Only check storage if not using local mode
+        if settings.storage_backend != "local":
             storage = get_storage()
             if hasattr(storage, 'generate_presigned_url'):
                 storage.generate_presigned_url("healthcheck", expires_in=1)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            logger.exception("Failed to initialize storage layer")
-            raise RuntimeError("Storage initialization failed") from exc
-    
-    # Setup logging system
-    setup_logging(app)
+            startup_status["storage_ok"] = True
+
+        # Setup logging system
+        setup_logging(app)
+        startup_status["ready"] = True
+        startup_status["error"] = None
+    except Exception as exc:  # pragma: no cover - defensive guard
+        startup_status["ready"] = False
+        startup_status["error"] = str(exc)
+        logger.exception("Startup initialization failed")
+        raise
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -60,7 +95,14 @@ def root(request: Request):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    status = "ok" if startup_status["ready"] else "degraded"
+    return {
+        "status": status,
+        "db": "ok" if startup_status["db_ok"] else "error",
+        "storage": "ok" if startup_status["storage_ok"] else "error",
+        "backend": settings.storage_backend,
+        "error": startup_status["error"] or "",
+    }
 
 
 @app.get("/config")

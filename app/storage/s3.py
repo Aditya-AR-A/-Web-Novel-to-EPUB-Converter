@@ -18,16 +18,19 @@ class S3Storage:
 
     def __init__(self) -> None:
         settings = get_settings()
-        if not settings.aws_s3_bucket:
+        bucket = settings.resolved_s3_bucket
+        if not bucket:
             raise RuntimeError("AWS_S3_BUCKET configuration is required.")
 
-        self.bucket = settings.aws_s3_bucket
+        self.bucket = bucket
         session_kwargs = {}
-        if settings.aws_access_key_id and settings.aws_secret_access_key:
-            session_kwargs["aws_access_key_id"] = settings.aws_access_key_id
-            session_kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
-        if settings.aws_region:
-            session_kwargs["region_name"] = settings.aws_region
+        if settings.resolved_s3_access_key_id and settings.resolved_s3_secret_access_key:
+            session_kwargs["aws_access_key_id"] = settings.resolved_s3_access_key_id
+            session_kwargs["aws_secret_access_key"] = settings.resolved_s3_secret_access_key
+        if settings.resolved_s3_region:
+            session_kwargs["region_name"] = settings.resolved_s3_region
+        if settings.resolved_s3_endpoint_url:
+            session_kwargs["endpoint_url"] = settings.resolved_s3_endpoint_url
 
         try:
             self._client = boto3.client("s3", **session_kwargs)
@@ -72,6 +75,20 @@ class S3Storage:
         except ClientError as exc:
             logger.exception("Failed to generate presigned URL", extra={"key": object_key})
             raise RuntimeError("Failed to generate presigned URL") from exc
+
+    def list_objects(self, prefix: str = "") -> list[str]:
+        keys: list[str] = []
+        paginator = self._client.get_paginator("list_objects_v2")
+        try:
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+                for item in page.get("Contents", []):
+                    key = item.get("Key")
+                    if key:
+                        keys.append(key)
+        except ClientError as exc:
+            logger.exception("Failed to list S3 objects", extra={"prefix": prefix})
+            raise RuntimeError("Failed to list S3 objects") from exc
+        return keys
 
 
 @lru_cache()

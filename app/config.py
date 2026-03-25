@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     aws_secret_access_key: Optional[str] = Field(default=None, env="AWS_SECRET_ACCESS_KEY")
     aws_region: str = Field(default="us-east-1", env="AWS_REGION")
     aws_s3_bucket: Optional[str] = Field(default=None, env="AWS_S3_BUCKET")
+    aws_s3_endpoint_url: Optional[str] = Field(default=None, env="AWS_S3_ENDPOINT_URL")
+
+    # Cloudflare R2 compatibility aliases (used when AWS-style keys are not provided)
+    r2_access_key_id: Optional[str] = Field(default=None, env="R2_ACCESS_KEY_ID")
+    r2_secret_access_key: Optional[str] = Field(default=None, env="R2_SECRET_ACCESS_KEY")
+    r2_bucket: Optional[str] = Field(default=None, env="R2_BUCKET")
+    r2_endpoint_url: Optional[str] = Field(default=None, env="R2_ENDPOINT_URL")
+    r2_region: Optional[str] = Field(default=None, env="R2_REGION")
 
     # Google Drive configuration
     google_service_account_json: Optional[str] = Field(default=None, env="GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -36,6 +44,26 @@ class Settings(BaseSettings):
     local_storage_path: str = Field(default="books", env="LOCAL_STORAGE_PATH")
 
     s3_presign_expiration: int = Field(default=3600, env="S3_PRESIGN_EXPIRATION")
+
+    @property
+    def resolved_s3_access_key_id(self) -> Optional[str]:
+        return self.aws_access_key_id or self.r2_access_key_id
+
+    @property
+    def resolved_s3_secret_access_key(self) -> Optional[str]:
+        return self.aws_secret_access_key or self.r2_secret_access_key
+
+    @property
+    def resolved_s3_bucket(self) -> Optional[str]:
+        return self.aws_s3_bucket or self.r2_bucket
+
+    @property
+    def resolved_s3_endpoint_url(self) -> Optional[str]:
+        return self.aws_s3_endpoint_url or self.r2_endpoint_url
+
+    @property
+    def resolved_s3_region(self) -> str:
+        return self.r2_region or self.aws_region
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

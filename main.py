@@ -17,7 +17,8 @@ def create_ebook(url: str, chapters_per_book: int = 500, chapter_workers: int = 
     Returns the base title or raises an exception for the caller to log.
     """
     metadata = get_chapter_metadata(url)
-    chapters = get_chapters(url if chapter_workers > 0 else metadata["starting_url"],
+    chapters = get_chapters(url,
+                            metadata["starting_url"],
                             chapter_workers=chapter_workers,
                             chapter_limit=chapter_limit)
     # Debug: print chapter titles and text lengths

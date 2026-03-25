@@ -2,15 +2,19 @@
  * EPUB list, download and delete API calls.
  * This module only talks to the server – it has no direct DOM access.
  */
-import { fetchJSON } from './client.js';
+import { fetchBlob, fetchJSON, requestOK } from './client.js';
 
 /** @returns {Promise<{epubs: string[], total: number}>} */
 export async function listEpubs(limit = 500) {
     const data = await fetchJSON(`/epubs?offset=0&limit=${limit}`);
     const payload = data?.data ?? {};
+    const total = typeof payload.total === 'number' ? payload.total : 0;
+    if (total > limit) {
+        console.warn(`Library contains ${total} files but UI requested limit=${limit}. Increase limit to fetch all items.`);
+    }
     return {
         epubs: Array.isArray(payload.epubs) ? payload.epubs : [],
-        total: typeof payload.total === 'number' ? payload.total : 0,
+        total,
     };
 }
 
@@ -20,9 +24,7 @@ export async function listEpubs(limit = 500) {
  * @param {string} name – the epub filename
  */
 export async function downloadSingle(name) {
-    const r = await fetch('/epub/download?name=' + encodeURIComponent(name));
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const blob = await r.blob();
+    const blob = await fetchBlob('/epub/download?name=' + encodeURIComponent(name), { timeoutMs: 60_000 });
     triggerDownload(blob, name);
 }
 
@@ -31,24 +33,24 @@ export async function downloadSingle(name) {
  * @param {string[]} names
  */
 export async function downloadMany(names) {
-    const r = await fetch('/epub/download-many', {
+    const blob = await fetchBlob('/epub/download-many', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ names }),
+        timeoutMs: 120_000,
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    triggerDownload(await r.blob(), 'epubs.zip');
+    triggerDownload(blob, 'epubs.zip');
 }
 
 /** Download every EPUB as a zip. */
 export async function downloadAll() {
-    const r = await fetch('/epub/download-all', {
+    const blob = await fetchBlob('/epub/download-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
+        timeoutMs: 180_000,
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    triggerDownload(await r.blob(), 'all_epubs.zip');
+    triggerDownload(blob, 'all_epubs.zip');
 }
 
 /**
@@ -56,18 +58,17 @@ export async function downloadAll() {
  * @param {string[]} names
  */
 export async function deleteEpubs(names) {
-    const r = await fetch('/epubs', {
+    await requestOK('/epubs', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(names),
+        timeoutMs: 30_000,
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
 }
 
 /** Delete ALL EPUBs. */
 export async function deleteAllEpubs() {
-    const r = await fetch('/epubs/all', { method: 'DELETE' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    await requestOK('/epubs/all', { method: 'DELETE', timeoutMs: 30_000 });
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────

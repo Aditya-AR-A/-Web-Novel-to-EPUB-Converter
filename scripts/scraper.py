@@ -324,7 +324,6 @@ def get_chapters_sequential(
 
     start_at = max(1, start_at)
     next_url: str | None = read_first_url
-    valid_seen = 0
 
     # If starting beyond chapter 1, try to find the exact starting URL from the index page
     if start_at > 1 and index_url:
@@ -332,7 +331,6 @@ def get_chapters_sequential(
         for num, u in indexed:
             if num == start_at:
                 next_url = u
-                valid_seen = start_at - 1
                 break
 
     empty_streak = 0
@@ -351,55 +349,25 @@ def get_chapters_sequential(
                 break
         else:
             empty_streak = 0
-            if current_index >= start_chapter:
-                results_map[current_index] = (chapter_title or f"Chapter {current_index}", chapter_data)
-                # After each success, opportunistically retry one failed bucket item
-                if failed_bucket:
-                    raise_if_cancelled()
-                    if not is_stopped():
-                        retry_idx, retry_url = failed_bucket.pop(0)
-                        try:
-                            pool = sample_proxy_pool(1)
-                        except Exception:
-                            pool = []
-                        retry_proxy = pool[0] if pool else None
-                        try:
-                            _, r_title, r_text = get_chapter_data(retry_url, preferred_proxy=retry_proxy)
-                            if r_text and r_text.strip():
-                                results_map[retry_idx] = (r_title or f"Chapter {retry_idx}", r_text)
-                                print(f"✅ Immediate retry succeeded for chapter {retry_idx}")
-                            else:
-                                failed_bucket.append((retry_idx, retry_url))
-                        except Exception as e:
-                            print(f"⚠️ Immediate retry failed for chapter {retry_idx}: {e}")
-                            failed_bucket.append((retry_idx, retry_url))
-        last_index = max(last_index, current_index)
+            chapter_title_list.append(chapter_title or f"Chapter {collected + 1}")
+            chapter_text_list.append(chapter_data)
+            collected += 1
+
+            if limit and limit > 0 and collected >= limit:
+                break
+
         # Prefer parsed next link; else attempt to guess from current URL
         if next_url_short:
             next_url = urljoin(current_url, next_url_short)
         else:
-            guessed = _guess_next_url(current_url)
-            if guessed:
-                print(f"➡️ Continuing to guessed next chapter: {guessed}")
-                next_url = guessed
-            else:
-                next_url = None
+            next_url = None
 
-    # Final retry pass for any failed chapters
-    if failed_bucket and not is_stopped():
-        print(f"🔁 Final retry for {len(failed_bucket)} missed chapters (up to 5 attempts)")
-        MAX_ATTEMPTS = 5
-        bucket = list(failed_bucket)
-        for attempt in range(MAX_ATTEMPTS):
-            if not bucket:
-                break
-        next_url = urljoin(origin_url, next_url_short) if next_url_short else None
     return {"title": chapter_title_list, "text": chapter_text_list}
 
 
 def get_chapters(
     index_url: str,
-    read_first_url: str,
+    read_first_url: str | None = None,
     *,
     chapter_workers: int = 0,
     chapter_limit: int | None = None,
@@ -413,17 +381,18 @@ def get_chapters(
     """
     limit = chapter_limit if chapter_limit and chapter_limit > 0 else None
     start = max(1, start_chapter or 1)
+    entrypoint = read_first_url or index_url
     if chapter_workers and chapter_workers > 0:
         return get_chapters_concurrent_from_index(
             index_url,
-            read_first_url,
+            entrypoint,
             max_workers=chapter_workers,
             limit=limit,
             start=start,
         )
     return get_chapters_sequential(
         index_url,
-        read_first_url,
+        entrypoint,
         start_at=start,
         limit=limit,
     )

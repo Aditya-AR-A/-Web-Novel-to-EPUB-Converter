@@ -92,6 +92,23 @@ class EpubService:
             result = session.execute(select(EpubMetadata).order_by(EpubMetadata.created_at.desc()))
             return list(result.scalars().all())
 
+    def list_storage_epub_keys(self, prefix: str = "epubs/") -> List[str]:
+        if not hasattr(self.storage, "list_objects"):
+            return []
+        keys = self.storage.list_objects(prefix=prefix)  # type: ignore[attr-defined]
+        return [k for k in keys if isinstance(k, str) and k.lower().endswith(".epub")]
+
+    @staticmethod
+    def resolve_storage_key(name: str) -> str:
+        raw = (name or "").strip().lstrip("/")
+        if not raw:
+            return raw
+        if "/" in raw:
+            return raw
+        if raw.lower().endswith(".epub"):
+            return f"epubs/{raw}"
+        return raw
+
     def get_epub(self, ebook_id: int) -> Optional[EpubMetadata]:
         with get_session() as session:
             return session.get(EpubMetadata, ebook_id)
