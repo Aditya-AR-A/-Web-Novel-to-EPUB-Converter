@@ -154,13 +154,18 @@ class BlockedError(RuntimeError):
     pass
 
 
+class SourceNotFoundError(RuntimeError):
+    """Raised when source URL does not exist (HTTP 404/410)."""
+    pass
+
+
 def _looks_blocked(resp: requests.Response) -> bool:
     if resp.status_code in (401, 403, 429):
         return True
     # Simple signature scan
     txt = resp.text.lower()[:8000]
     signals = [
-        'captcha', 'access denied', 'forbidden', 'cloudflare', 'ddos protection',
+        'captcha', 'access denied', 'forbidden', 'ddos protection',
         'verify you are human', 'just a moment'
     ]
     return any(s in txt for s in signals)
@@ -228,6 +233,8 @@ def fetch_with_proxy_rotation(
         }
         try:
             resp = requests.get(url, timeout=timeout, proxies=proxies, headers=headers)
+            if resp.status_code in (404, 410):
+                raise SourceNotFoundError(f"Source URL not found (HTTP {resp.status_code})")
             if ENABLE_BLOCK_DETECT and _looks_blocked(resp):
                 raise BlockedError(f"Blocked by source site (HTTP {resp.status_code})")
             resp.raise_for_status()
@@ -247,6 +254,11 @@ def fetch_with_proxy_rotation(
                     print(f"[proxy_manager] Quarantined {proxy_url} fail_score={score}")
             if SHORT_CIRCUIT_ON_FIRST_403:
                 break
+        except SourceNotFoundError as e:
+            last_exc = e
+            print(f"[proxy_manager] Not found for {url}: {e}")
+            # No point rotating proxies for a truly missing URL
+            break
         except Exception as e:
             last_exc = e
             print(f"[proxy_manager] Attempt {attempt+1}/{retries} failed for {url} proxy={proxy_url}: {e}")
